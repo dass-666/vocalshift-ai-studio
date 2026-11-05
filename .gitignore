@@ -1,0 +1,7 @@
+build/
+build-*/
+bench-out/
+*.user
+.vs/
+.vscode/
+.idea/
