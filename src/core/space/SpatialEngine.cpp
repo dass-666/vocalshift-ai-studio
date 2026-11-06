@@ -77,6 +77,7 @@ void SpatialEngine::clearState()
     sideHp.z = sideLp.z = sendHp.z = sendLp.z = 0.0f;
     for (int c = 0; c < 2; ++c) { slapHp[c].z = 0.0f; slapLp[c].z = 0.0f; }
     slapFbL = slapFbR = 0.0f;
+    slapTimeL = 0.0f;
 }
 
 void SpatialEngine::reset()
@@ -143,8 +144,8 @@ void SpatialEngine::process (float* const* io, int numChannels, int numSamples)
         while (slapMs < 70.0) slapMs *= 2.0;
         while (slapMs > 180.0) slapMs *= 0.5;
     }
-    slapTimeL = (float) (slapMs * fs / 1000.0);
-    slapTimeR = slapTimeL * 1.13f;
+    slapGoalL = (float) (slapMs * fs / 1000.0);
+    if (slapTimeL <= 0.0f) slapTimeL = slapGoalL; // first block after prepare/reset: no glide
 
     constexpr int sub = 32;
     for (int s0 = 0; s0 < numSamples; s0 += sub)
@@ -160,6 +161,9 @@ void SpatialEngine::process (float* const* io, int numChannels, int numSamples)
             const float revG = reverbS.next() * amt;
             const float slapG = slapS.next() * amt;
             const float depth = modS.next() * (float) (fs / 1000.0);
+            // max 0.4 % delay change per sample (~7 cents of pitch bend) while the tempo moves
+            slapTimeL += std::clamp (slapGoalL - slapTimeL, -0.004f, 0.004f);
+            slapTimeR = slapTimeL * 1.13f;
 
             const float L = io[0][i], R = io[1][i];
             const float m = 0.5f * (L + R);

@@ -1831,6 +1831,37 @@ TEST ("psola: engine switch is click-free, allocation-free and Phase 4 stays the
     MEASURE ("largest step of the input tone itself = %.3f", jIn);
     CHECK (jSwitch < 1.15f * std::max (jIn, jBase));
 }
+TEST ("spatial 2.0: a host tempo change glides the slap time instead of jumping (no click)")
+{
+    const double fs = 48000;
+    vs::SpatialEngine sp;
+    sp.prepare (fs, 2);
+    vs::SpatialParams q;
+    q.amount = 1.0f; q.width = 0.0f; q.reverbGain = 0.0f; q.slapGain = 0.28f; q.rt60 = 1.0f; q.modDepthMs = 0.0f;
+    sp.setParams (q);
+    sp.setTempoBpm (120.0);
+    const int n = (int) (fs * 3.0);
+    Signal l ((size_t) n), r;
+    for (int i = 0; i < n; ++i) l[(size_t) i] = 0.3f * std::sin (2.0f * 3.14159265f * 400.0f * (float) i / (float) fs);
+    r = l;
+    float maxStep = 0.0f, maxStepBefore = 0.0f, prev = 0.0f;
+    for (int pos = 0; pos + 480 <= n; pos += 480)
+    {
+        if (pos == (int) fs * 3 / 2) sp.setTempoBpm (80.0);
+        float* ptrs[2] = { l.data() + pos, r.data() + pos };
+        sp.process (ptrs, 2, 480);
+        for (int i = 0; i < 480; ++i)
+        {
+            const float d = std::abs (ptrs[0][i] - prev);
+            prev = ptrs[0][i];
+            if (pos < (int) fs * 3 / 2) maxStepBefore = std::max (maxStepBefore, d);
+            else if (pos > (int) fs * 3 / 2 - 480) maxStep = std::max (maxStep, d);
+        }
+    }
+    MEASURE ("slap tempo 120 -> 80 BPM: max sample step %.4f (steady state before: %.4f)", maxStep, maxStepBefore);
+    CHECK (maxStep < 1.6f * maxStepBefore);
+}
+
 
 int main (int argc, char** argv)
 {

@@ -80,6 +80,7 @@ private:
     std::vector<float> slapBufL, slapBufR;
     int slapSize = 1, slapPos = 0;
     float slapTimeL = 0, slapTimeR = 0;
+    float slapGoalL = 0; // Phase 5: slap time follows host tempo through a slew (a jump of the read pointer clicks)
     OnePole slapHp[2], slapLp[2];
     float slapFbL = 0, slapFbR = 0;
 };

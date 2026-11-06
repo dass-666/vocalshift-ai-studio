@@ -774,8 +774,9 @@ void VocalShiftEditor::resized()
             auto a = proPanels[5];
             a.removeFromTop (24);
             a.reduce (12, 2);
-            improvedButton.setBounds (a.removeFromTop (28));
-            engineButton.setBounds (a.removeFromTop (28));
+            auto toggles = a.removeFromTop (28);
+            improvedButton.setBounds (toggles.removeFromLeft (toggles.getWidth() / 2));
+            engineButton.setBounds (toggles);
             engineInfo.setBounds (a);
         }
     }
