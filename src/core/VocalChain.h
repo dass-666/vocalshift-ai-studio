@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dsp/ConsonantBlend.h"
 #include "dsp/LinearSmoother.h"
 #include "enhance/VocalEnhancer.h"
 #include "mix/LevelMatcher.h"
@@ -46,11 +47,16 @@ public:
     int nonFiniteEvents() const { return nonFiniteCount.load(); }
     // Current automatic level compensation gain (dB), for display.
     float autoLevelGainDb() const { return levelGainDb.load(); }
+    // Output samples the last-resort soft clip has altered (should stay 0 at sane levels).
+    long clipAlteredSamples() const { return mixer.clipAlteredSamples(); }
+    // Whether the robust level matcher currently considers the voice active (diagnostics).
+    bool levelVoiceActive() const { return levelMatcher.voiceActive(); }
 
 private:
     void processChunk (float* const* io, int numChannels, int offset, int n);
 
     std::unique_ptr<IPitchShifter> shifter;
+    ConsonantBlend consonants;
     ToneShaper tone;
     VocalEnhancer enhancer;
     LevelMatcher levelMatcher;

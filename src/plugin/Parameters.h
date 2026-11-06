@@ -20,10 +20,17 @@ inline constexpr const char* mix = "mix";
 inline constexpr const char* outputGain = "outputGain";
 inline constexpr const char* safetyClip = "safetyClip";
 inline constexpr const char* autoLevel = "autoLevel";
+// v3: second voice and revised DSP
+inline constexpr const char* route = "route";           // 0 = transformar, 1 = segunda voz
+inline constexpr const char* secondGain = "secondGain"; // Pro: second voice level relative to the original (dB)
+inline constexpr const char* pan = "pan";               // Pro: second voice balance (-100..100)
+inline constexpr const char* offsetMs = "offsetMs";     // Pro: artistic delay of the second voice (0..100 ms)
+inline constexpr const char* improved = "improved";     // Pro: revised DSP (off = exact behaviour of earlier versions)
 
 // Every automatable parameter except bypass (presets never touch bypass).
 inline constexpr const char* presetParamIds[] = { mode, semitones, fineCents, character, magic, formantShift,
-                                                  brightness, mix, outputGain, safetyClip, autoLevel };
+                                                  brightness, mix, outputGain, safetyClip, autoLevel,
+                                                  route, secondGain, pan, offsetMs, improved };
 
 // Non-automatable state stored as ValueTree properties.
 inline constexpr const char* propUiMode = "uiMode";         // "easy" | "pro"
@@ -35,7 +42,10 @@ inline constexpr const char* legacyPropEngineMode = "engineMode"; // v1 only, mi
 
 // v1: first prototype (formantPreserve parameter, engineMode property)
 // v2: macros (character, magic), mode as automatable parameter, autoLevel
-inline constexpr int currentStateVersion = 2;
+// v3: second voice (route, secondGain, pan, offsetMs) and the revised-DSP switch (improved).
+//     States and presets older than v3 are migrated with route = transform and improved = off,
+//     so they sound exactly like they did.
+inline constexpr int currentStateVersion = 3;
 
 juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
@@ -54,6 +64,11 @@ struct RawParams
     std::atomic<float>* outputGain = nullptr;
     std::atomic<float>* safetyClip = nullptr;
     std::atomic<float>* autoLevel = nullptr;
+    std::atomic<float>* route = nullptr;
+    std::atomic<float>* secondGain = nullptr;
+    std::atomic<float>* pan = nullptr;
+    std::atomic<float>* offsetMs = nullptr;
+    std::atomic<float>* improved = nullptr;
 
     void bind (juce::AudioProcessorValueTreeState& apvts);
     VoiceParams read() const;

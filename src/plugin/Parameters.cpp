@@ -54,6 +54,20 @@ AudioProcessorValueTreeState::ParameterLayout createLayout()
 
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { autoLevel, 2 }, String::fromUTF8 ("Nivel automático"), defaults.autoLevel));
 
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { route, 3 }, "Ruta",
+        StringArray { "Transformar", "Segunda voz" }, (int) defaults.route));
+
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { secondGain, 3 }, "Volumen segunda voz",
+        NormalisableRange<float> (-30.0f, 0.0f, 0.1f), defaults.secondGainDb, attrs (" dB", 1)));
+
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { pan, 3 }, "Pan segunda voz",
+        NormalisableRange<float> (-100.0f, 100.0f, 1.0f), defaults.pan, attrs (" %", 0)));
+
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { offsetMs, 3 }, "Desfase artistico",
+        NormalisableRange<float> (0.0f, 100.0f, 0.1f), defaults.offsetMs, attrs (" ms", 1)));
+
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { improved, 3 }, "DSP mejorado", defaults.improved));
+
     return layout;
 }
 
@@ -76,6 +90,11 @@ void RawParams::bind (AudioProcessorValueTreeState& s)
     outputGain = get (params::outputGain);
     safetyClip = get (params::safetyClip);
     autoLevel = get (params::autoLevel);
+    route = get (params::route);
+    secondGain = get (params::secondGain);
+    pan = get (params::pan);
+    offsetMs = get (params::offsetMs);
+    improved = get (params::improved);
 }
 
 VoiceParams RawParams::read() const
@@ -92,6 +111,11 @@ VoiceParams RawParams::read() const
     p.outputGainDb = outputGain->load();
     p.safetyClip = safetyClip->load() >= 0.5f;
     p.autoLevel = autoLevel->load() >= 0.5f;
+    p.route = route->load() >= 0.5f ? VoiceRoute::secondVoice : VoiceRoute::transform;
+    p.secondGainDb = secondGain->load();
+    p.pan = pan->load();
+    p.offsetMs = offsetMs->load();
+    p.improved = improved->load() >= 0.5f;
     return p;
 }
 
@@ -116,6 +140,11 @@ void applyToParameters (AudioProcessorValueTreeState& s, const VoiceParams& p)
     set (outputGain, p.outputGainDb);
     set (safetyClip, p.safetyClip ? 1.0f : 0.0f);
     set (autoLevel, p.autoLevel ? 1.0f : 0.0f);
+    set (route, (float) (int) p.route);
+    set (secondGain, p.secondGainDb);
+    set (pan, p.pan);
+    set (offsetMs, p.offsetMs);
+    set (improved, p.improved ? 1.0f : 0.0f);
 }
 
 } // namespace vs::params

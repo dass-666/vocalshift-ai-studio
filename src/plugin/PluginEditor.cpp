@@ -104,6 +104,12 @@ VocalShiftEditor::VocalShiftEditor (VocalShiftProcessor& p)
     radicalButton.onClick = [this] { setVoiceMode (VoiceMode::radical); };
     addAndMakeVisible (identityButton);
     addAndMakeVisible (radicalButton);
+    transformButton.setButtonText ("Transformar");
+    secondVoiceButton.setButtonText ("Segunda voz");
+    transformButton.onClick = [this] { setRoute (VoiceRoute::transform); };
+    secondVoiceButton.onClick = [this] { setRoute (VoiceRoute::secondVoice); };
+    addAndMakeVisible (transformButton);
+    addAndMakeVisible (secondVoiceButton);
     modeDescription.setColour (Label::textColourId, colours::dim);
     modeDescription.setJustificationType (Justification::topLeft);
     addAndMakeVisible (modeDescription);
@@ -115,8 +121,6 @@ VocalShiftEditor::VocalShiftEditor (VocalShiftProcessor& p)
     setupKnob (easyPitch, "Pitch", u8s ("Sube o baja la nota (semitonos). La duración no cambia."), params::semitones, true);
     setupKnob (easyCharacter, u8s ("Carácter"), u8s ("Cuánto cambia el timbre: formantes y brillo."), params::character, true);
     setupKnob (easyMagic, "Magia", u8s ("Pulido: compresión suave + aire en agudos."), params::magic, true);
-    setupKnob (easyMix, "Mezcla", {}, params::mix, false);
-    setupKnob (easyGain, "Ganancia", {}, params::outputGain, false);
 
     // Pro page
     setupKnob (proPitch, "Pitch", {}, params::semitones, false);
@@ -127,6 +131,12 @@ VocalShiftEditor::VocalShiftEditor (VocalShiftProcessor& p)
     setupKnob (proBrightness, "Ajuste brillo", {}, params::brightness, false);
     setupKnob (proMix, "Mezcla", {}, params::mix, false);
     setupKnob (proGain, "Ganancia salida", {}, params::outputGain, false);
+    setupKnob (proSecondGain, "Volumen 2.a voz", {}, params::secondGain, false);
+    setupKnob (proPan, "Pan 2.a voz", {}, params::pan, false);
+    setupKnob (proOffset, u8s ("Desfase artístico"), {}, params::offsetMs, false);
+    improvedButton.setButtonText (u8s ("DSP mejorado (consonantes, nivel robusto, mapeo de Carácter revisado). Apagado = comportamiento de versiones anteriores"));
+    improvedAttachment = std::make_unique<ButtonAttachment> (state, params::improved, improvedButton);
+    addChildComponent (improvedButton);
     safetyButton.setButtonText (u8s ("Protección de picos (soft clip, techo 0 dBFS)"));
     safetyAttachment = std::make_unique<ButtonAttachment> (state, params::safetyClip, safetyButton);
     addChildComponent (safetyButton);
@@ -159,14 +169,16 @@ VocalShiftEditor::VocalShiftEditor (VocalShiftProcessor& p)
     rebuildPresetMenu();
     proMode = state.state.getProperty (params::propUiMode, "easy").toString() == "pro";
     shownVoiceMode = voiceMode();
+    shownRoute = route();
+    shownImproved = state.getRawParameterValue (params::improved)->load() >= 0.5f;
     refreshModeButtons();
     setUiMode (proMode);
 
     const int w = state.state.getProperty (params::propUiWidth, 900);
-    const int h = state.state.getProperty (params::propUiHeight, 580);
+    const int h = state.state.getProperty (params::propUiHeight, 680);
     setResizable (true, true);
-    setResizeLimits (760, 500, 1600, 1000);
-    setSize (jlimit (760, 1600, w), jlimit (500, 1000, h));
+    setResizeLimits (760, 640, 1600, 1000);
+    setSize (jlimit (760, 1600, w), jlimit (640, 1000, h));
 
     timerCallback(); // populate preset name, status and engine info immediately
     startTimerHz (30);
@@ -211,18 +223,49 @@ void VocalShiftEditor::setVoiceMode (VoiceMode m)
     refreshModeButtons();
 }
 
+VoiceRoute VocalShiftEditor::route() const
+{
+    return state.getRawParameterValue (params::route)->load() >= 0.5f ? VoiceRoute::secondVoice : VoiceRoute::transform;
+}
+
+void VocalShiftEditor::setRoute (VoiceRoute r)
+{
+    if (auto* param = state.getParameter (params::route))
+    {
+        param->beginChangeGesture();
+        param->setValueNotifyingHost (param->convertTo0to1 ((float) (int) r));
+        param->endChangeGesture();
+    }
+    shownRoute = r;
+    refreshModeButtons();
+}
+
 void VocalShiftEditor::refreshModeButtons()
 {
     const bool radical = shownVoiceMode == VoiceMode::radical;
     identityButton.setColour (TextButton::buttonColourId, radical ? colours::panel : colours::accent.darker (0.3f));
     radicalButton.setColour (TextButton::buttonColourId, radical ? colours::morph.darker (0.3f) : colours::panel);
     easyCharacter.slider.setColour (Slider::rotarySliderFillColourId, radical ? colours::morph : colours::accent);
-    modeDescription.setText (radical
-        ? u8s ("Transformación radical: los formantes siguen al tono y Carácter los empuja más lejos "
-               "(hasta 6 st) con brillo de hasta 6 dB. Cambia el carácter de la voz; no es conversión de identidad por IA.")
-        : u8s ("Conservar identidad: los formantes se mantienen casi en su sitio. Carácter solo añade un cambio "
-               "sutil de timbre (hasta 25 % de seguimiento, 1 st y 1.5 dB)."),
-        dontSendNotification);
+    const bool second = shownRoute == VoiceRoute::secondVoice;
+    transformButton.setColour (TextButton::buttonColourId, second ? colours::panel : colours::accent.darker (0.3f));
+    secondVoiceButton.setColour (TextButton::buttonColourId, second ? colours::accent.darker (0.3f) : colours::panel);
+    for (auto* k : { &proMix })
+        k->slider.setEnabled (! second);
+    for (auto* k : { &proSecondGain, &proPan, &proOffset })
+        k->slider.setEnabled (second);
+    String d;
+    if (second)
+        d << u8s ("Segunda voz: tu voz original sigue al frente (sin cambio de tono, 0 dB) y se suma una segunda voz "
+                  "transpuesta, más baja (−9 dB por defecto). Los tres macros controlan solo la segunda voz. ");
+    if (shownImproved)
+        d << (radical
+            ? u8s ("Radical: los formantes se mueven 0.7 × el intervalo + hasta 2 st con Carácter (nunca más que el tono); brillo hasta 2.5 dB. Sigue siendo DSP, no conversión por IA.")
+            : u8s ("Identidad: los formantes se compensan y se mueven 0.25 × el intervalo + hasta 0.4 st con Carácter; brillo hasta 1 dB."));
+    else
+        d << (radical
+            ? u8s ("Radical (DSP anterior): los formantes siguen al tono y Carácter los empuja hasta 6 st; brillo hasta 6 dB.")
+            : u8s ("Identidad (DSP anterior): formantes casi en su sitio; Carácter añade hasta 1 st y 1.5 dB."));
+    modeDescription.setText (d, dontSendNotification);
     repaint();
 }
 
@@ -233,13 +276,14 @@ void VocalShiftEditor::setUiMode (bool pro)
     easyTab.setColour (TextButton::buttonColourId, pro ? colours::panel : colours::accent.darker (0.3f));
     proTab.setColour (TextButton::buttonColourId, pro ? colours::accent.darker (0.3f) : colours::panel);
 
-    for (auto* k : { &easyPitch, &easyCharacter, &easyMagic, &easyMix, &easyGain })
+    for (auto* k : { &easyPitch, &easyCharacter, &easyMagic })
     {
         k->slider.setVisible (! pro);
         k->label.setVisible (! pro);
         k->hint.setVisible (! pro);
     }
-    for (auto* k : { &proPitch, &proFine, &proCharacter, &proMagic, &proFormant, &proBrightness, &proMix, &proGain })
+    for (auto* k : { &proPitch, &proFine, &proCharacter, &proMagic, &proFormant, &proBrightness, &proMix, &proGain,
+                      &proSecondGain, &proPan, &proOffset })
     {
         k->slider.setVisible (pro);
         k->label.setVisible (pro);
@@ -247,6 +291,7 @@ void VocalShiftEditor::setUiMode (bool pro)
     modeDescription.setVisible (! pro);
     safetyButton.setVisible (pro);
     autoLevelButton.setVisible (pro);
+    improvedButton.setVisible (pro);
     engineInfo.setVisible (pro);
     resized();
 }
@@ -364,9 +409,13 @@ void VocalShiftEditor::timerCallback()
     outMeter.setClipped (proc.outputClipped());
 
     const auto mode = voiceMode();
-    if (mode != shownVoiceMode)
+    const auto rt = route();
+    const bool imp = state.getRawParameterValue (params::improved)->load() >= 0.5f;
+    if (mode != shownVoiceMode || rt != shownRoute || imp != shownImproved)
     {
         shownVoiceMode = mode;
+        shownRoute = rt;
+        shownImproved = imp;
         refreshModeButtons();
     }
     syncPresetBox();
@@ -428,11 +477,13 @@ void VocalShiftEditor::resized()
     auto modeRow = r.removeFromTop (36);
     identityButton.setBounds (modeRow.removeFromLeft (modeRow.getWidth() / 2).reduced (2));
     radicalButton.setBounds (modeRow.reduced (2));
+    auto routeRow = r.removeFromTop (36);
+    transformButton.setBounds (routeRow.removeFromLeft (routeRow.getWidth() / 2).reduced (2));
+    secondVoiceButton.setBounds (routeRow.reduced (2));
 
     if (! proMode)
     {
         modeDescription.setBounds (r.removeFromTop (40));
-        auto smallRow = r.removeFromBottom (110);
         auto macros = r.reduced (0, 4);
         const int w = macros.getWidth() / 3;
         for (auto* k : { &easyPitch, &easyCharacter, &easyMagic })
@@ -443,23 +494,17 @@ void VocalShiftEditor::resized()
             const int side = jmin (cell.getWidth(), cell.getHeight(), 230);
             k->slider.setBounds (cell.withSizeKeepingCentre (side, side));
         }
-        const int sw = jmin (160, smallRow.getWidth() / 2);
-        auto smallArea = smallRow.withSizeKeepingCentre (sw * 2, smallRow.getHeight());
-        for (auto* k : { &easyMix, &easyGain })
-        {
-            auto cell = smallArea.removeFromLeft (sw).reduced (6, 0);
-            k->label.setBounds (cell.removeFromTop (18));
-            k->slider.setBounds (cell);
-        }
     }
     else
     {
         r.removeFromTop (6);
-        auto infoArea = r.removeFromBottom (110);
+        auto infoArea = r.removeFromBottom (130);
+        improvedButton.setBounds (infoArea.removeFromTop (22));
         safetyButton.setBounds (infoArea.removeFromTop (22));
         autoLevelButton.setBounds (infoArea.removeFromTop (22));
         engineInfo.setBounds (infoArea);
-        auto top = r.removeFromTop (r.getHeight() / 2);
+        auto top = r.removeFromTop (r.getHeight() / 3);
+        auto mid = r.removeFromTop (r.getHeight() / 2);
         auto layoutRow = [] (Rectangle<int> row, std::initializer_list<Knob*> ks) {
             const int w = row.getWidth() / (int) ks.size();
             for (auto* k : ks)
@@ -470,7 +515,8 @@ void VocalShiftEditor::resized()
             }
         };
         layoutRow (top, { &proPitch, &proFine, &proCharacter, &proMagic });
-        layoutRow (r, { &proFormant, &proBrightness, &proMix, &proGain });
+        layoutRow (mid, { &proFormant, &proBrightness, &proMix, &proGain });
+        layoutRow (r, { &proSecondGain, &proPan, &proOffset });
     }
 }
 

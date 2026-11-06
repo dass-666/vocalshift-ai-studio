@@ -34,6 +34,7 @@ add_library(vs_core STATIC
     src/core/state/MacroMapping.cpp
     src/core/enhance/VocalEnhancer.cpp
     src/core/mix/LevelMatcher.cpp
+    src/core/dsp/ConsonantBlend.cpp
 )
 target_include_directories(vs_core PUBLIC src)
 target_link_libraries(vs_core PUBLIC signalsmith-stretch)

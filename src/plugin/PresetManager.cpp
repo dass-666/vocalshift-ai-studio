@@ -50,6 +50,23 @@ Result PresetManager::fromPresetTree (const ValueTree& t)
     if (version < 1 || version > presetFormatVersion)
         return Result::fail ("Version de preset no soportada: " + String (version));
 
+    auto setParam = [&] (const char* id, float v) {
+        if (auto* param = apvts.getParameter (id))
+        {
+            param->beginChangeGesture();
+            param->setValueNotifyingHost (param->convertTo0to1 (v));
+            param->endChangeGesture();
+        }
+    };
+    if (version < 3)
+    {
+        // Presets from before the second voice: transform route, previous DSP, neutral extras.
+        setParam (params::improved, 0.0f);
+        setParam (params::route, 0.0f);
+        setParam (params::secondGain, -9.0f);
+        setParam (params::pan, 0.0f);
+        setParam (params::offsetMs, 0.0f);
+    }
     for (auto child : t)
     {
         const String id = child.getProperty ("id");
