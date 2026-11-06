@@ -31,12 +31,14 @@ inline constexpr const char* spatial = "spatial";           // Pro: spatial proc
 inline constexpr const char* spaceWidth = "spaceWidth";     // Pro trims (percent of what Magia asks for)
 inline constexpr const char* spaceReverb = "spaceReverb";
 inline constexpr const char* spaceDelay = "spaceDelay";     // Pro: revised DSP (off = exact behaviour of earlier versions)
+// v5: pitch engine selector
+inline constexpr const char* engine = "engine";             // Pro: 0 = Fase 4 (Signalsmith, reference), 1 = experimental PSOLA
 
 // Every automatable parameter except bypass (presets never touch bypass).
 inline constexpr const char* presetParamIds[] = { mode, semitones, fineCents, character, magic, formantShift,
                                                   brightness, mix, outputGain, safetyClip, autoLevel,
                                                   route, secondGain, pan, offsetMs, improved,
-                                                  spatial, spaceWidth, spaceReverb, spaceDelay };
+                                                  spatial, spaceWidth, spaceReverb, spaceDelay, engine };
 
 // Non-automatable state stored as ValueTree properties.
 inline constexpr const char* propUiMode = "uiMode";         // "easy" | "pro"
@@ -53,7 +55,8 @@ inline constexpr const char* legacyPropEngineMode = "engineMode"; // v1 only, mi
 //     so they sound exactly like they did.
 // v4: Urban Spatial Engine (spatial, spaceWidth, spaceReverb, spaceDelay); the second-voice fader range grew to
 //     -60 (silence) .. +6 dB. States and presets older than v4 are migrated with spatial = off (Phase 3 sound).
-inline constexpr int currentStateVersion = 4;
+// v5: pitch engine selector (engine). States and presets older than v5 are migrated with engine = 0 (Phase 4 engine).
+inline constexpr int currentStateVersion = 5;
 
 juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
@@ -81,6 +84,7 @@ struct RawParams
     std::atomic<float>* spaceWidth = nullptr;
     std::atomic<float>* spaceReverb = nullptr;
     std::atomic<float>* spaceDelay = nullptr;
+    std::atomic<float>* engine = nullptr;
 
     void bind (juce::AudioProcessorValueTreeState& apvts);
     VoiceParams read() const;

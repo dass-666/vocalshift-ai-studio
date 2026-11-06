@@ -38,6 +38,7 @@ struct EngineSettings
     float spaceSlap = 0.0f;        // linear return, 0..0.3
     float spaceModMs = 0.4f;       // ms
     float textureAmount = 0.0f;    // 0..1 (Caracter) -> VoiceTexture
+    int pitchEngine = 0;           // Phase 5: 0 = Signalsmith (Phase 4 reference), 1 = experimental PSOLA
 };
 
 // Mapping constants (PROVISIONAL: chosen by engineering judgement, not yet

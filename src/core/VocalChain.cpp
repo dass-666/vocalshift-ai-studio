@@ -20,6 +20,16 @@ void VocalChain::prepare (double sampleRate, int numChannels, int maxBlockSize)
 
     shifter->prepare (sampleRate, channels, maxBlock);
     latency = shifter->latencySamples();
+    alt = std::make_unique<PsolaPitchShifter>();
+    alt->setLatencyTarget (latency);
+    alt->prepare (sampleRate, channels, maxBlock);
+    if (alt->latencySamples() != latency)
+        alt.reset(); // cannot align with the reference at this rate: the experimental engine stays unavailable
+    xfadeLength = std::max (1, (int) (0.1 * sampleRate));
+    primeLength = latency + 2048;
+    switchPhase = switchCount = 0;
+    targetEngine = alt ? requestedEngine : 0;
+    activeEngine = targetEngine;
     consonants.prepare (sampleRate, channels);
     deEsser.prepare (sampleRate, channels);
     texture.prepare (sampleRate, channels);
@@ -42,6 +52,7 @@ void VocalChain::prepare (double sampleRate, int numChannels, int maxBlockSize)
     alloc (inScratch);
     alloc (wetScratch);
     alloc (dryScratch);
+    alloc (altScratch);
     inPtrs.resize ((size_t) channels);
     wetPtrs.resize ((size_t) channels);
     dryPtrs.resize ((size_t) channels);
@@ -58,6 +69,9 @@ void VocalChain::prepare (double sampleRate, int numChannels, int maxBlockSize)
 void VocalChain::reset()
 {
     shifter->reset();
+    if (alt) alt->reset();
+    switchPhase = switchCount = 0;
+    activeEngine = targetEngine;
     consonants.reset();
     deEsser.reset();
     texture.reset();
@@ -71,6 +85,8 @@ void VocalChain::reset()
 
 void VocalChain::setEngineSettings (const EngineSettings& e, bool bypassed)
 {
+    requestedEngine = std::clamp (e.pitchEngine, 0, 1);
+    targetEngine = alt ? requestedEngine : 0;
     semitoneSmoother.setTarget (std::clamp (e.semitones, -24.0f, 24.0f));
     preservationSmoother.setTarget (std::clamp (e.formantPreservation, 0.0f, 1.0f));
     formantSmoother.setTarget (std::clamp (e.formantShiftSemitones, -12.0f, 12.0f));
@@ -152,6 +168,17 @@ void VocalChain::processChunk (float* const* io, int nCh, int offset, int n)
 
     mixer.pushDry (inPtrs.data(), dryPtrs.data(), nCh, n);
 
+    // Engine switch: the new engine runs alongside (priming covers its latency), then a 100 ms equal-power crossfade.
+    if (switchPhase == 0 && targetEngine != activeEngine)
+    {
+        (activeEngine == 0 ? static_cast<IPitchShifter&> (*alt) : *shifter).reset();
+        switchPhase = 1;
+        switchCount = 0;
+    }
+    const bool both = switchPhase != 0;
+    IPitchShifter& activeE = activeEngine == 1 ? static_cast<IPitchShifter&> (*alt) : *shifter;
+    IPitchShifter& otherE = activeEngine == 1 ? *shifter : static_cast<IPitchShifter&> (*alt);
+
     // Update engine settings every 32 samples while smoothing.
     constexpr int sub = 32;
     for (int s = 0; s < n; s += sub)
@@ -161,16 +188,44 @@ void VocalChain::processChunk (float* const* io, int nCh, int offset, int n)
         ps.semitones = semitoneSmoother.advance (len);
         ps.formantPreservation = preservationSmoother.advance (len);
         ps.formantShiftSemitones = formantSmoother.advance (len);
-        shifter->setSettings (ps);
+        activeE.setSettings (ps);
+        if (both) otherE.setSettings (ps);
 
         const float* inSub[ToneShaper::maxChannels];
         float* wetSub[ToneShaper::maxChannels];
+        float* altSub[ToneShaper::maxChannels];
         for (int c = 0; c < channels; ++c)
         {
             inSub[c] = inPtrs[(size_t) c] + s;
             wetSub[c] = wetPtrs[(size_t) c] + s;
+            altSub[c] = altScratch[(size_t) c].data() + s;
         }
-        shifter->process (inSub, wetSub, len);
+        activeE.process (inSub, wetSub, len);
+        if (both) otherE.process (inSub, altSub, len);
+    }
+    if (both)
+    {
+        for (int i = 0; i < n; ++i)
+        {
+            float g = 0.0f; // weight of the other (incoming) engine
+            if (switchPhase == 2)
+                g = std::min (1.0f, (float) switchCount / (float) xfadeLength);
+            const float wa = std::cos (1.5707963f * g), wb = std::sin (1.5707963f * g);
+            for (int c = 0; c < channels; ++c)
+                wetScratch[(size_t) c][(size_t) i] = wa * wetScratch[(size_t) c][(size_t) i] + wb * altScratch[(size_t) c][(size_t) i];
+            ++switchCount;
+            if (switchPhase == 1 && switchCount >= primeLength) { switchPhase = 2; switchCount = 0; }
+            else if (switchPhase == 2 && switchCount >= xfadeLength)
+            {
+                // The remaining samples of this chunk belong entirely to the new engine.
+                activeEngine = 1 - activeEngine;
+                switchPhase = 0;
+                for (int j = i + 1; j < n; ++j)
+                    for (int c = 0; c < channels; ++c)
+                        wetScratch[(size_t) c][(size_t) j] = altScratch[(size_t) c][(size_t) j];
+                break;
+            }
+        }
     }
 
     consonants.process (dryPtrs.data(), wetPtrs.data(), nCh, n);

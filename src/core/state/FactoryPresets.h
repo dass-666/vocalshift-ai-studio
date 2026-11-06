@@ -48,6 +48,8 @@ struct VoiceParams
     float spaceWidth = 100.0f;      // Pro trims of what Magia asks for, [0, 100] %
     float spaceReverb = 100.0f;
     float spaceDelay = 100.0f;
+    // Phase 5: pitch engine. 0 = Phase 4 reference (Signalsmith), 1 = experimental PSOLA (never the default).
+    int engine = 0;
 
     float totalSemitones() const;   // semitones + cents, clamped to [-24, 24]
 };

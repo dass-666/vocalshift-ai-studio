@@ -82,6 +82,8 @@ AudioProcessorValueTreeState::ParameterLayout createLayout()
         NormalisableRange<float> (0.0f, 100.0f, 1.0f), defaults.spaceReverb, attrs (" %", 0)));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { spaceDelay, 4 }, "Eco corto",
         NormalisableRange<float> (0.0f, 100.0f, 1.0f), defaults.spaceDelay, attrs (" %", 0)));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { engine, 5 }, "Motor de tono",
+        StringArray { "Fase 4 (referencia)", "Experimental (PSOLA)" }, defaults.engine));
 
     return layout;
 }
@@ -114,6 +116,7 @@ void RawParams::bind (AudioProcessorValueTreeState& s)
     spaceWidth = get (params::spaceWidth);
     spaceReverb = get (params::spaceReverb);
     spaceDelay = get (params::spaceDelay);
+    engine = get (params::engine);
 }
 
 VoiceParams RawParams::read() const
@@ -139,6 +142,7 @@ VoiceParams RawParams::read() const
     p.spaceWidth = spaceWidth->load();
     p.spaceReverb = spaceReverb->load();
     p.spaceDelay = spaceDelay->load();
+    p.engine = engine->load() >= 0.5f ? 1 : 0;
     return p;
 }
 
@@ -172,6 +176,7 @@ void applyToParameters (AudioProcessorValueTreeState& s, const VoiceParams& p)
     set (spaceWidth, p.spaceWidth);
     set (spaceReverb, p.spaceReverb);
     set (spaceDelay, p.spaceDelay);
+    set (engine, (float) p.engine);
 }
 
 } // namespace vs::params

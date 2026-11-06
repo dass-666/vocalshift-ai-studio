@@ -279,6 +279,7 @@ VocalShiftEditor::VocalShiftEditor (VocalShiftProcessor& p)
     setupToggle (safetyButton, safetyAttachment, u8s ("Protección de picos"), params::safetyClip);
     setupToggle (spatialButton, spatialAttachment, u8s ("Procesamiento espacial"), params::spatial);
     setupToggle (improvedButton, improvedAttachment, u8s ("DSP mejorado (apagado = versiones anteriores)"), params::improved);
+    setupToggle (engineButton, engineAttachment, u8s ("Motor experimental PSOLA (sin validar al oído)"), params::engine);
     engineInfo.setColour (Label::textColourId, pal::dim);
     engineInfo.setFont (FontOptions (12.0f));
     engineInfo.setJustificationType (Justification::topLeft);
@@ -454,7 +455,7 @@ void VocalShiftEditor::setUiMode (bool pro)
         k->label.setVisible (pro);
     }
     modeDescription.setVisible (! pro);
-    for (auto* b : { &safetyButton, &autoLevelButton, &improvedButton, &spatialButton })
+    for (auto* b : { &safetyButton, &autoLevelButton, &improvedButton, &spatialButton, &engineButton })
         b->setVisible (pro);
     engineInfo.setVisible (pro);
     layoutVisibility();
@@ -597,7 +598,7 @@ void VocalShiftEditor::timerCallback()
         const double sr = proc.getPreparedSampleRate();
         const int lat = proc.getEngineLatencySamples();
         String info;
-        info << "Motor: " << proc.getEngineName() << u8s (" (calidad, bloque 120 ms)\n")
+        info << "Motor: " << proc.getEngineName() << u8s (proc.getEngineName()[0] == 'P' ? " (EXPERIMENTAL, sin validar al oído)\n" : " (calidad, bloque 120 ms)\n")
              << "Latencia reportada al host: " << lat << " muestras";
         if (sr > 0)
             info << " (" << String (1000.0 * lat / sr, 1) << " ms a " << String (sr / 1000.0, 1) << " kHz)";
@@ -774,6 +775,7 @@ void VocalShiftEditor::resized()
             a.removeFromTop (24);
             a.reduce (12, 2);
             improvedButton.setBounds (a.removeFromTop (28));
+            engineButton.setBounds (a.removeFromTop (28));
             engineInfo.setBounds (a);
         }
     }

@@ -27,6 +27,7 @@ include(cmake/Dependencies.cmake)
 add_library(vs_core STATIC
     src/core/VocalChain.cpp
     src/core/dsp/SignalsmithPitchShifter.cpp
+    src/core/dsp/PsolaPitchShifter.cpp
     src/core/mix/VocalMixEngine.cpp
     src/core/morph/ToneShaper.cpp
     src/core/analysis/PitchDetector.cpp

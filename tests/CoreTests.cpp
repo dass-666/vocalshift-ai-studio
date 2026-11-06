@@ -1708,6 +1708,129 @@ TEST ("regression: Phase 3 second-voice presets keep their exact Phase 3 sound (
     }
 }
 
+// ---------------------------------------------------------------------------
+// Fase 5: experimental PSOLA engine + engine switch
+TEST ("psola: F0 follows the requested interval and latency equals the reference engine")
+{
+    const double fs = 48000;
+    const auto v = vowel (fs, 200.0, 3.0, 0.3f, 5.0, 30.0);
+    vs::YinPitchDetector yin (fs, 40.0f, 3000.0f);
+    const float inF0 = yin.medianF0 (v.data(), (int) v.size());
+    for (float st : { -12.f, -5.f, 3.f, 7.f, 12.f, 19.f })
+    {
+        vs::EngineSettings e = pitchParams (st, 100.0f);
+        e.pitchEngine = 1;
+        vs::VocalChain chain;
+        chain.setEngineSettings (e, false);
+        chain.prepare (fs, 1, 512);
+        CHECK (chain.activeEngineIndex() == 1);
+        vs::VocalChain ref;
+        ref.prepare (fs, 1, 512);
+        CHECK (chain.latencySamples() == ref.latencySamples());
+        std::vector<Signal> x { v };
+        x[0].resize (v.size() + (size_t) chain.latencySamples(), 0.0f);
+        auto out = run (chain, x, 512);
+        auto mid = segment (out[0], chain.latencySamples() + (int) fs, (int) fs);
+        const float f = yin.medianF0 (mid.data(), (int) mid.size());
+        const double err = centsBetween (inF0 * std::pow (2.0, st / 12.0), f);
+        MEASURE ("PSOLA %+5.0f st: F0 error %+.2f cents", st, err);
+        CHECK_MSG (std::abs (err) < 10.0, "st=%.0f err=%.2f", st, err);
+        CHECK (allFinite (out[0]));
+    }
+}
+
+TEST ("psola: silence stays silent, hostile input is bounded, output independent of block size")
+{
+    const double fs = 48000;
+    {
+        vs::PsolaPitchShifter e;
+        e.setLatencyTarget (7200);
+        e.prepare (fs, 1, 512);
+        Signal z (48000, 0.0f), o (48000, 1.0f);
+        const float* ip = z.data(); float* op = o.data();
+        for (int p = 0; p < 48000; p += 480) { const float* i2 = ip + p; float* o2 = op + p; e.process (&i2, &o2, 480); }
+        CHECK (std::all_of (o.begin(), o.end(), [] (float v) { return v == 0.0f; }));
+    }
+    {
+        vs::PsolaPitchShifter e;
+        e.prepare (fs, 1, 512);
+        vs::PitchSettings ps; ps.semitones = 9.0f;
+        e.setSettings (ps);
+        auto n = whiteNoise (96000, 1.0f, 7);
+        Signal o (n.size());
+        float peak = 0.0f;
+        for (int p = 0; p < 96000; p += 500)
+        {
+            const float* i2 = n.data() + p; float* o2 = o.data() + p;
+            ps.semitones = (float) ((p / 2000) % 25 - 12);
+            e.setSettings (ps);
+            e.process (&i2, &o2, 500);
+        }
+        for (float v : o) peak = std::max (peak, std::abs (v));
+        MEASURE ("PSOLA white-noise peak with automation = %.2f", peak);
+        CHECK (allFinite (o) && peak < 4.0f);
+    }
+    const auto v = vowel (fs, 180.0, 1.5);
+    auto renderBlocks = [&] (int block, uint32_t seed) {
+        vs::EngineSettings e = pitchParams (5.0f, 100.0f);
+        e.pitchEngine = 1;
+        vs::VocalChain chain;
+        chain.setEngineSettings (e, false);
+        chain.prepare (fs, 1, 1024);
+        return run (chain, { v }, block, nullptr, seed)[0];
+    };
+    const auto a = renderBlocks (512, 0), b = renderBlocks (1024, 99);
+    double d = 0;
+    for (size_t i = 0; i < a.size(); ++i) d = std::max (d, (double) std::abs (a[i] - b[i]));
+    MEASURE ("PSOLA max difference between block sizes = %.2e", d);
+    CHECK (d < 1e-4);
+}
+
+TEST ("psola: engine switch is click-free, allocation-free and Phase 4 stays the default")
+{
+    const double fs = 48000;
+    CHECK (vs::VoiceParams{}.engine == 0);
+    for (const auto& fp : vs::factoryPresets())
+        CHECK_MSG (fp.params.engine == 0 || fp.id.rfind ("exp_", 0) == 0, "preset %s must not select the experimental engine", fp.id.c_str());
+    const auto v = harmonicTone (fs, 200.0, 4.0, 0.3f, 5.0, 20.0);
+    auto render = [&] (bool doSwitch, float& maxJump, long& allocs, int& active) {
+        vs::VocalChain chain;
+        auto e = pitchParams (4.0f, 100.0f);
+        chain.setEngineSettings (e, false);
+        chain.prepare (fs, 1, 512);
+        Signal out = v;
+        float prev = 0.0f;
+        maxJump = 0.0f;
+        g_allocCount = 0;
+        g_trackAllocs = true;
+        for (int pos = 0; pos + 480 <= (int) v.size(); pos += 480)
+        {
+            if (doSwitch && pos == 96000) { e.pitchEngine = 1; chain.setEngineSettings (e, false); }
+            float* p = out.data() + pos;
+            chain.process (&p, 1, 480);
+            if (pos > 40000)
+                for (int i = 0; i < 480; ++i) { maxJump = std::max (maxJump, std::abs (p[i] - prev)); prev = p[i]; }
+            else prev = p[479];
+        }
+        g_trackAllocs = false;
+        allocs = g_allocCount.load();
+        active = chain.activeEngineIndex();
+        CHECK (! chain.engineSwitching());
+    };
+    float jBase = 0, jSwitch = 0; long aBase = 0, aSwitch = 0; int actBase = 0, actSwitch = 0;
+    render (false, jBase, aBase, actBase);
+    render (true, jSwitch, aSwitch, actSwitch);
+    MEASURE ("max sample jump: no switch %.3f, with switch %.3f; allocations %ld; active engine after switch = %d",
+             jBase, jSwitch, aSwitch, actSwitch);
+    CHECK (actBase == 0 && actSwitch == 1);
+    CHECK (aBase == 0 && aSwitch == 0);
+    // The PSOLA engine keeps the sharp edges of the (saw-like) test tone that the STFT engine smooths, so the
+    // reference for a click is the input's own largest step, not the Phase 4 engine's output.
+    float jIn = 0.0f;
+    for (size_t i = 40001; i < v.size(); ++i) jIn = std::max (jIn, std::abs (v[i] - v[i - 1]));
+    MEASURE ("largest step of the input tone itself = %.3f", jIn);
+    CHECK (jSwitch < 1.15f * std::max (jIn, jBase));
+}
 
 int main (int argc, char** argv)
 {
