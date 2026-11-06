@@ -40,22 +40,22 @@ private:
     struct Knob
     {
         juce::Slider slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow };
-        juce::Label label;
+        juce::Label label, hint;
         std::unique_ptr<SliderAttachment> attachment;
     };
 
     void timerCallback() override;
-    void setupKnob (Knob&, const juce::String& title, const char* paramId);
-    void attachKnob (Knob&, const char* paramId);
+    void setupKnob (Knob&, const juce::String& title, const juce::String& hint, const char* paramId, bool big);
     void setUiMode (bool pro);
-    void setEngineMode (EngineMode m);
-    void refreshEasyPage();
+    void setVoiceMode (VoiceMode m);
+    void refreshModeButtons();
     void rebuildPresetMenu();
+    void syncPresetBox();
     void onPresetChosen();
     void savePreset();
     void loadPreset();
-    juce::String statusSummary() const;
-    EngineMode engineMode() const;
+    juce::String effectiveSummary() const;
+    VoiceMode voiceMode() const;
 
     VocalShiftProcessor& proc;
     juce::AudioProcessorValueTreeState& state;
@@ -66,22 +66,24 @@ private:
     std::unique_ptr<ButtonAttachment> bypassAttachment;
     juce::ComboBox presetBox;
 
-    // Easy page
-    juce::TextButton identityButton, morphButton;
+    // Shared: voice mode selector (parameter "mode")
+    juce::TextButton identityButton, radicalButton;
     juce::Label modeDescription, status;
-    Knob easyIntensity, easySecond, easyMix, easyGain;
+
+    // Easy page: the three macros + mix/gain
+    Knob easyPitch, easyCharacter, easyMagic, easyMix, easyGain;
 
     // Pro page
-    Knob proSemitones, proFine, proPreserve, proFormant, proBrightness, proMix, proGain;
-    juce::ToggleButton safetyButton;
-    std::unique_ptr<ButtonAttachment> safetyAttachment;
+    Knob proPitch, proFine, proCharacter, proMagic, proFormant, proBrightness, proMix, proGain;
+    juce::ToggleButton safetyButton, autoLevelButton;
+    std::unique_ptr<ButtonAttachment> safetyAttachment, autoLevelAttachment;
     juce::Label engineInfo;
 
     juce::Label roadmap;
     MeterBar inMeter { "IN" }, outMeter { "OUT" };
 
     bool proMode = false;
-    EngineMode shownEngineMode = EngineMode::identityPitch;
+    VoiceMode shownVoiceMode = VoiceMode::keepIdentity;
     juce::String shownPresetId;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Array<juce::File> userPresetFiles;

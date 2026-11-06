@@ -1,10 +1,12 @@
 #pragma once
 
 #include "dsp/LinearSmoother.h"
+#include "enhance/VocalEnhancer.h"
+#include "mix/LevelMatcher.h"
 #include "dsp/PitchShifter.h"
 #include "mix/VocalMixEngine.h"
 #include "morph/ToneShaper.h"
-#include "state/FactoryPresets.h"
+#include "state/MacroMapping.h"
 
 #include <atomic>
 #include <memory>
@@ -13,8 +15,9 @@
 namespace vs
 {
 
-// Full V0 signal path, independent of JUCE:
-//   in -> IdentityEngine (pitch + formants) -> ToneShaper (brightness) -> wet
+// Full signal path, independent of JUCE:
+//   in -> IdentityEngine (pitch + formants) -> ToneShaper (brightness)
+//      -> VocalEnhancer ("Magia": compression + air) -> LevelMatcher (auto level) -> wet
 //   in -> latency-matched dry delay -> dry
 //   VocalMixEngine(dry, wet) -> out
 // prepare() may allocate; everything else is real-time safe.
@@ -27,7 +30,8 @@ public:
     void reset();
 
     // Real-time safe: just updates smoothing targets.
-    void setParams (const VoiceParams& p, bool bypassed);
+    void setParams (const VoiceParams& p, bool bypassed) { setEngineSettings (mapMacros (p), bypassed); }
+    void setEngineSettings (const EngineSettings& e, bool bypassed);
 
     // In-place processing; numSamples may exceed maxBlockSize (internally chunked).
     void process (float* const* io, int numChannels, int numSamples);
@@ -40,12 +44,16 @@ public:
     float lastOutputPeak() const { return outPeak; }
     // Number of blocks where a non-finite sample was produced and muted.
     int nonFiniteEvents() const { return nonFiniteCount.load(); }
+    // Current automatic level compensation gain (dB), for display.
+    float autoLevelGainDb() const { return levelGainDb.load(); }
 
 private:
     void processChunk (float* const* io, int numChannels, int offset, int n);
 
     std::unique_ptr<IPitchShifter> shifter;
     ToneShaper tone;
+    VocalEnhancer enhancer;
+    LevelMatcher levelMatcher;
     VocalMixEngine mixer;
 
     LinearSmoother semitoneSmoother, preservationSmoother, formantSmoother;
@@ -57,6 +65,7 @@ private:
     int channels = 0, maxBlock = 0, latency = 0;
     float inPeak = 0.0f, outPeak = 0.0f;
     std::atomic<int> nonFiniteCount { 0 };
+    std::atomic<float> levelGainDb { 0.0f };
     bool needsReset = false;
 };
 

@@ -16,7 +16,6 @@ bool PresetManager::applyFactoryPreset (const std::string& id)
     if (p == nullptr)
         return false;
     params::applyToParameters (apvts, p->params);
-    apvts.state.setProperty (params::propEngineMode, (int) p->mode, nullptr);
     apvts.state.setProperty (params::propPresetId, String (p->id), nullptr);
     return true;
 }
@@ -33,9 +32,7 @@ ValueTree PresetManager::toPresetTree (const String& name) const
     ValueTree t (presetTag);
     t.setProperty ("formatVersion", presetFormatVersion, nullptr);
     t.setProperty ("name", name, nullptr);
-    t.setProperty (params::propEngineMode, apvts.state.getProperty (params::propEngineMode, 0), nullptr);
-    for (auto* id : { params::semitones, params::fineCents, params::formantPreservation, params::formantShift,
-                      params::brightness, params::mix, params::outputGain, params::safetyClip })
+    for (auto* id : params::presetParamIds)
     {
         ValueTree p ("Param");
         p.setProperty ("id", id, nullptr);
@@ -66,8 +63,12 @@ Result PresetManager::fromPresetTree (const ValueTree& t)
             param->endChangeGesture();
         }
     }
-    const int mode = jlimit (0, 1, (int) t.getProperty (params::propEngineMode, 0));
-    apvts.state.setProperty (params::propEngineMode, mode, nullptr);
+    if (version == 1 && t.hasProperty (params::legacyPropEngineMode))
+    {
+        // v1 preset: mode was a property, not a parameter.
+        if (auto* param = apvts.getParameter (params::mode))
+            param->setValueNotifyingHost (param->convertTo0to1 ((float) jlimit (0, 1, (int) t.getProperty (params::legacyPropEngineMode))));
+    }
     apvts.state.setProperty (params::propPresetId, "user:" + t.getProperty ("name").toString(), nullptr);
     return Result::ok();
 }

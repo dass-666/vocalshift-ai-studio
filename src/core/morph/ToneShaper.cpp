@@ -6,9 +6,10 @@
 namespace vs
 {
 
-void ToneShaper::prepare (double sampleRate, int numChannels)
+void ToneShaper::prepare (double sampleRate, int numChannels, float shelfFrequencyHz)
 {
     fs = sampleRate;
+    frequencyHz = (float) std::min ((double) shelfFrequencyHz, 0.4 * sampleRate);
     channels = std::min (numChannels, maxChannels);
     gainSmoother.prepare (sampleRate, 0.05);
     gainSmoother.snapTo (gainSmoother.getTarget());
@@ -32,7 +33,7 @@ void ToneShaper::updateCoefficients (float gainDb)
     }
     // RBJ cookbook high shelf, S = 1.
     const double A = std::pow (10.0, gainDb / 40.0);
-    const double w0 = 2.0 * 3.14159265358979323846 * shelfFrequencyHz / fs;
+    const double w0 = 2.0 * 3.14159265358979323846 * frequencyHz / fs;
     const double cosw = std::cos (w0), sinw = std::sin (w0);
     const double alpha = sinw / 2.0 * std::sqrt (2.0);
     const double sqA = std::sqrt (A);

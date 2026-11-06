@@ -4,7 +4,7 @@ Ordenado por valor esperado / riesgo. Nada de esto está implementado; la UI lo 
 
 ## Bloque siguiente recomendado (V1.1: calidad antes que funciones)
 1. **Escuchas con voces reales** (protocolo en QUALITY.md) y prueba en FL Studio. Sin esto, cualquier optimización es a ciegas.
-2. **Compensación automática de nivel** (seguidor RMS lento, ~±12 dB) — corrige la pérdida de volumen medida.
+2. ~~Compensación automática de nivel~~ — hecho (LevelMatcher). Pendiente: calibrar Carácter/Magia con el Experimento 01.
 3. **Prototipo PSOLA** detrás de `IPitchShifter` + `VocalAnalysis` en tiempo real (YIN incremental) y comparación
    A/B frente a Signalsmith con el mismo banco de pruebas. Decidir motor por escucha, no por suposición.
 4. **Preservación de consonantes**: detección de segmentos no sonoros/transitorios y mezcla con la señal sin procesar.

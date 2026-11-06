@@ -62,6 +62,8 @@ public:
     double getPreparedSampleRate() const { return preparedRate.load(); }
     const char* getEngineName() const { return chain.engineName(); }
     int getNonFiniteEvents() const { return chain.nonFiniteEvents(); }
+    float getAutoLevelGainDb() const { return chain.autoLevelGainDb(); }
+    VoiceParams getCurrentVoiceParams() const { return raw.read(); }
 
     // State migration hook (public for tests).
     static juce::ValueTree migrateState (juce::ValueTree state);

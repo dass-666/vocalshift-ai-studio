@@ -3,10 +3,11 @@
 ```
 src/core/        C++ puro, sin JUCE: se prueba de forma aislada (vs_core)
   dsp/           IdentityEngine: IPitchShifter (interfaz) + SignalsmithPitchShifter, LinearSmoother
-  morph/         MorphEngine: ToneShaper (brillo, DSP) + INeuralVoiceConverter (solo interfaz, sin implementar)
-  mix/           VocalMixEngine: dry retardado, mezcla, bypass con fundido, ganancia, soft clip
+  morph/         MorphEngine: ToneShaper (shelf, DSP) + INeuralVoiceConverter (solo interfaz, sin implementar)
+  enhance/       VocalEnhancer ("Magia": compresor + aire)
+  mix/           VocalMixEngine (dry retardado, mezcla, bypass, ganancia, soft clip) + LevelMatcher (nivel automático)
   analysis/      VocalAnalysis: YIN (F0 + aperiodicidad), RMS, centroide. Offline / tests por ahora
-  state/         VoiceParams, EngineMode, presets de fábrica (datos)
+  state/         VoiceParams (macros), MacroMapping (macros -> EngineSettings), presets de fábrica
   VocalChain     Cadena completa: entrada -> pitch/formantes -> brillo -> mezcla -> salida
 src/plugin/      PluginHost (JUCE): parámetros APVTS, estado versionado, PresetManager, EasyUI/ProUI
 tests/           CoreTests (DSP) y PluginTests (procesador real, sin host)
@@ -16,9 +17,11 @@ bench/           QualityBench: renders A/B igualados en RMS + mediciones
 ## Flujo de señal
 
 ```
-entrada ──┬─> IPitchShifter (tono + formantes) ─> ToneShaper (brillo) ─> wet ─┐
-          └─> línea de retardo = latencia del motor ──────────────────> dry ──┴─> VocalMixEngine ─> salida
-                                                                        (mezcla, bypass, ganancia, soft clip)
+Macros (Pitch, Carácter, Magia, modo) ──> mapMacros() ──> EngineSettings
+
+entrada ──┬─> IPitchShifter (tono + formantes) ─> ToneShaper (brillo) ─> VocalEnhancer (Magia)
+          │        ─> LevelMatcher (nivel automático, referencia = dry) ─> wet ─┐
+          └─> línea de retardo = latencia del motor ───────────────────> dry ───┴─> VocalMixEngine ─> salida
 ```
 
 ## Reglas del hilo de audio (verificadas)

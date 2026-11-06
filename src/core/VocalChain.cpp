@@ -21,6 +21,8 @@ void VocalChain::prepare (double sampleRate, int numChannels, int maxBlockSize)
     shifter->prepare (sampleRate, channels, maxBlock);
     latency = shifter->latencySamples();
     tone.prepare (sampleRate, channels);
+    enhancer.prepare (sampleRate, channels);
+    levelMatcher.prepare (sampleRate);
     mixer.prepare (sampleRate, channels, maxBlock, latency);
 
     semitoneSmoother.prepare (sampleRate, 0.05);
@@ -53,19 +55,23 @@ void VocalChain::reset()
 {
     shifter->reset();
     tone.reset();
+    enhancer.reset();
+    levelMatcher.reset();
     mixer.reset();
     needsReset = false;
 }
 
-void VocalChain::setParams (const VoiceParams& p, bool bypassed)
+void VocalChain::setEngineSettings (const EngineSettings& e, bool bypassed)
 {
-    semitoneSmoother.setTarget (p.totalSemitones());
-    preservationSmoother.setTarget (std::clamp (p.formantPreservation, 0.0f, 100.0f) / 100.0f);
-    formantSmoother.setTarget (std::clamp (p.formantShift, -12.0f, 12.0f));
-    tone.setBrightnessDb (std::clamp (p.brightnessDb, -12.0f, 12.0f));
-    mixer.setMix (std::clamp (p.mixPercent, 0.0f, 100.0f) / 100.0f);
-    mixer.setOutputGainDb (std::clamp (p.outputGainDb, -24.0f, 12.0f));
-    mixer.setSafetyClip (p.safetyClip);
+    semitoneSmoother.setTarget (std::clamp (e.semitones, -24.0f, 24.0f));
+    preservationSmoother.setTarget (std::clamp (e.formantPreservation, 0.0f, 1.0f));
+    formantSmoother.setTarget (std::clamp (e.formantShiftSemitones, -12.0f, 12.0f));
+    tone.setBrightnessDb (std::clamp (e.brightnessDb, -12.0f, 12.0f));
+    enhancer.setMagic (std::clamp (e.magic01, 0.0f, 1.0f));
+    levelMatcher.setEnabled (e.autoLevel);
+    mixer.setMix (std::clamp (e.mix01, 0.0f, 1.0f));
+    mixer.setOutputGainDb (std::clamp (e.outputGainDb, -24.0f, 12.0f));
+    mixer.setSafetyClip (e.safetyClip);
     mixer.setBypassed (bypassed);
 }
 
@@ -142,6 +148,9 @@ void VocalChain::processChunk (float* const* io, int nCh, int offset, int n)
     }
 
     tone.process (wetPtrs.data(), nCh, n);
+    enhancer.process (wetPtrs.data(), nCh, n);
+    levelMatcher.process (dryPtrs.data(), wetPtrs.data(), nCh, n);
+    levelGainDb.store (levelMatcher.currentGainDb(), std::memory_order_relaxed);
     mixer.mixInto (wetPtrs.data(), dryPtrs.data(), ioPtrs.data(), nCh, n);
 }
 

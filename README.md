@@ -9,12 +9,13 @@ pero **todavía no ha sido validado por una persona dentro de FL Studio ni con v
 
 | Función | Detalle |
 |---|---|
-| Identity Pitch | Transposición ±24 st + ajuste fino ±100 cents, duración preservada, formantes preservables 0–100 % |
-| Voice Morph (DSP) | Desplazamiento de formantes ±12 st independiente del tono + brillo (shelf 2.5 kHz ±12 dB). No es conversión de identidad |
+| Macroperillas | **Pitch** (±24 st + fino ±100 ct), **Carácter** (timbre: formantes + brillo) y **Magia** (compresión + aire), todas conectadas a DSP real. Referencia: +7 st / 65 % / 70 % ([docs/MACROS.md](docs/MACROS.md)) |
+| Modos | **Conservar identidad** (formantes casi fijos) y **Transformación radical** (formantes siguen y se desplazan, hasta 6 st). No es conversión de identidad por IA |
+| Nivel automático | Iguala el RMS procesado al original (compensa la pérdida de nivel del motor) |
 | Mezcla | Dry/wet alineado en latencia, ganancia de salida, protección de picos (soft clip, techo 0 dBFS) |
 | Bypass | Sin clics (fundido 20 ms), mantiene la latencia, salida idéntica a la entrada retardada |
-| Estado | Proyecto restaurable, versionado (`stateVersion`), parámetros automatizables |
-| Presets | 7 presets de fábrica + guardar/cargar presets de usuario (`.vspreset`, XML versionado) |
+| Estado | Proyecto restaurable, versionado (`stateVersion` 2, con migración desde v1), 12 parámetros automatizables |
+| Presets | 9 presets de fábrica (incl. Referencia y Neutro) + presets de usuario (`.vspreset`, XML versionado) |
 | Interfaz | Modo Fácil y Pro sobre el mismo estado, redimensionable, medidores IN/OUT con indicador de clip |
 | Latencia | 150 ms constantes, reportada al host (modo calidad; no hay modo de baja latencia) |
 
@@ -38,6 +39,8 @@ descargable (pestaña *Actions* → ejecución → *Artifacts*).
 ## Documentación
 
 - [docs/FL_STUDIO_GUIDE.md](docs/FL_STUDIO_GUIDE.md) — instalar y probar en FL Studio
+- [docs/EXPERIMENT_01_VOZ_REAL.md](docs/EXPERIMENT_01_VOZ_REAL.md) — siguiente experimento con voz humana
+- [docs/MACROS.md](docs/MACROS.md) — qué hace realmente cada macroperilla
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — módulos y reglas de tiempo real
 - [docs/TECH_EVALUATION.md](docs/TECH_EVALUATION.md) — dependencias, licencias y alternativas
 - [docs/QUALITY.md](docs/QUALITY.md) — pruebas, mediciones, limitaciones y protocolo de escucha

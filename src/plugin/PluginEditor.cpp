@@ -78,11 +78,8 @@ VocalShiftEditor::VocalShiftEditor (VocalShiftProcessor& p)
 
     easyTab.setButtonText (u8s ("Fácil"));
     proTab.setButtonText ("Pro");
-    for (auto* b : { &easyTab, &proTab })
-    {
-        b->setClickingTogglesState (false);
-        addAndMakeVisible (b);
-    }
+    addAndMakeVisible (easyTab);
+    addAndMakeVisible (proTab);
     easyTab.onClick = [this] { setUiMode (false); };
     proTab.onClick = [this] { setUiMode (true); };
 
@@ -100,46 +97,53 @@ VocalShiftEditor::VocalShiftEditor (VocalShiftProcessor& p)
     addAndMakeVisible (saveButton);
     addAndMakeVisible (loadButton);
 
-    // Easy page
-    identityButton.setButtonText ("Identity Pitch");
-    morphButton.setButtonText ("Voice Morph (DSP)");
-    identityButton.setRadioGroupId (1);
-    morphButton.setRadioGroupId (1);
-    identityButton.setClickingTogglesState (true);
-    morphButton.setClickingTogglesState (true);
-    identityButton.onClick = [this] { setEngineMode (EngineMode::identityPitch); };
-    morphButton.onClick = [this] { setEngineMode (EngineMode::voiceMorphDsp); };
-    addChildComponent (identityButton);
-    addChildComponent (morphButton);
+    // Voice mode (automatable parameter, shared by both pages)
+    identityButton.setButtonText ("Conservar identidad");
+    radicalButton.setButtonText (u8s ("Transformación radical"));
+    identityButton.onClick = [this] { setVoiceMode (VoiceMode::keepIdentity); };
+    radicalButton.onClick = [this] { setVoiceMode (VoiceMode::radical); };
+    addAndMakeVisible (identityButton);
+    addAndMakeVisible (radicalButton);
     modeDescription.setColour (Label::textColourId, colours::dim);
     modeDescription.setJustificationType (Justification::topLeft);
-    addChildComponent (modeDescription);
+    addAndMakeVisible (modeDescription);
     status.setColour (Label::textColourId, colours::dim);
     status.setJustificationType (Justification::centredLeft);
     addAndMakeVisible (status);
 
-    setupKnob (easyIntensity, "Intensidad", params::semitones);
-    setupKnob (easySecond, "Naturalidad", params::formantPreservation);
-    setupKnob (easyMix, "Mezcla", params::mix);
-    setupKnob (easyGain, "Ganancia", params::outputGain);
+    // Easy page: three macros
+    setupKnob (easyPitch, "Pitch", u8s ("Sube o baja la nota (semitonos). La duración no cambia."), params::semitones, true);
+    setupKnob (easyCharacter, u8s ("Carácter"), u8s ("Cuánto cambia el timbre: formantes y brillo."), params::character, true);
+    setupKnob (easyMagic, "Magia", u8s ("Pulido: compresión suave + aire en agudos."), params::magic, true);
+    setupKnob (easyMix, "Mezcla", {}, params::mix, false);
+    setupKnob (easyGain, "Ganancia", {}, params::outputGain, false);
 
     // Pro page
-    setupKnob (proSemitones, u8s ("Transposición"), params::semitones);
-    setupKnob (proFine, "Ajuste fino", params::fineCents);
-    setupKnob (proPreserve, u8s ("Preservación formantes"), params::formantPreservation);
-    setupKnob (proFormant, "Desplaz. formantes", params::formantShift);
-    setupKnob (proBrightness, "Brillo", params::brightness);
-    setupKnob (proMix, "Mezcla", params::mix);
-    setupKnob (proGain, "Ganancia salida", params::outputGain);
+    setupKnob (proPitch, "Pitch", {}, params::semitones, false);
+    setupKnob (proFine, "Ajuste fino", {}, params::fineCents, false);
+    setupKnob (proCharacter, u8s ("Carácter"), {}, params::character, false);
+    setupKnob (proMagic, "Magia", {}, params::magic, false);
+    setupKnob (proFormant, "Ajuste formantes", {}, params::formantShift, false);
+    setupKnob (proBrightness, "Ajuste brillo", {}, params::brightness, false);
+    setupKnob (proMix, "Mezcla", {}, params::mix, false);
+    setupKnob (proGain, "Ganancia salida", {}, params::outputGain, false);
     safetyButton.setButtonText (u8s ("Protección de picos (soft clip, techo 0 dBFS)"));
     safetyAttachment = std::make_unique<ButtonAttachment> (state, params::safetyClip, safetyButton);
     addChildComponent (safetyButton);
+    autoLevelButton.setButtonText (u8s ("Nivel automático (iguala el volumen procesado al original)"));
+    autoLevelAttachment = std::make_unique<ButtonAttachment> (state, params::autoLevel, autoLevelButton);
+    addChildComponent (autoLevelButton);
     engineInfo.setColour (Label::textColourId, colours::dim);
     engineInfo.setJustificationType (Justification::topLeft);
     addChildComponent (engineInfo);
 
-    roadmap.setText (u8s ("Roadmap (NO disponible aún, sin controles): AI Voice Morph neuronal · Armonías · "
-                          "Doblaje · Edición por frases · Mezcla automática · Modo Live de baja latencia"),
+    for (auto* k : { &easyPitch, &easyCharacter, &easyMagic })
+        k->slider.setColour (Slider::rotarySliderFillColourId, colours::accent);
+    easyMagic.slider.setColour (Slider::rotarySliderFillColourId, colours::morph);
+    proMagic.slider.setColour (Slider::rotarySliderFillColourId, colours::morph);
+
+    roadmap.setText (u8s ("Roadmap (NO disponible aún, sin controles): IA neuronal · Armonías · "
+                          "Doblaje · Edición por frases · Modo Live de baja latencia"),
                      dontSendNotification);
     roadmap.setColour (Label::textColourId, colours::dim);
     roadmap.setFont (FontOptions (12.0f));
@@ -153,17 +157,16 @@ VocalShiftEditor::VocalShiftEditor (VocalShiftProcessor& p)
     }
 
     rebuildPresetMenu();
-
     proMode = state.state.getProperty (params::propUiMode, "easy").toString() == "pro";
-    shownEngineMode = engineMode();
-    refreshEasyPage();
+    shownVoiceMode = voiceMode();
+    refreshModeButtons();
     setUiMode (proMode);
 
     const int w = state.state.getProperty (params::propUiWidth, 900);
-    const int h = state.state.getProperty (params::propUiHeight, 560);
+    const int h = state.state.getProperty (params::propUiHeight, 580);
     setResizable (true, true);
-    setResizeLimits (760, 480, 1600, 1000);
-    setSize (jlimit (760, 1600, w), jlimit (480, 1000, h));
+    setResizeLimits (760, 500, 1600, 1000);
+    setSize (jlimit (760, 1600, w), jlimit (500, 1000, h));
 
     timerCallback(); // populate preset name, status and engine info immediately
     startTimerHz (30);
@@ -174,90 +177,76 @@ VocalShiftEditor::~VocalShiftEditor()
     stopTimer();
 }
 
-void VocalShiftEditor::setupKnob (Knob& k, const String& text, const char* paramId)
+void VocalShiftEditor::setupKnob (Knob& k, const String& text, const String& hint, const char* paramId, bool big)
 {
     k.slider.setTextBoxStyle (Slider::TextBoxBelow, false, 90, 20);
     k.label.setText (text, dontSendNotification);
     k.label.setJustificationType (Justification::centred);
+    if (big)
+        k.label.setFont (FontOptions (18.0f, Font::bold));
+    k.hint.setText (hint, dontSendNotification);
+    k.hint.setJustificationType (Justification::centredTop);
+    k.hint.setColour (Label::textColourId, colours::dim);
+    k.hint.setFont (FontOptions (12.0f));
     addChildComponent (k.slider);
     addChildComponent (k.label);
-    attachKnob (k, paramId);
-}
-
-void VocalShiftEditor::attachKnob (Knob& k, const char* paramId)
-{
-    k.attachment.reset();
+    addChildComponent (k.hint);
     k.attachment = std::make_unique<SliderAttachment> (state, paramId, k.slider);
 }
 
-EngineMode VocalShiftEditor::engineMode() const
+VoiceMode VocalShiftEditor::voiceMode() const
 {
-    return (int) state.state.getProperty (params::propEngineMode, 0) == 1 ? EngineMode::voiceMorphDsp
-                                                                          : EngineMode::identityPitch;
+    return state.getRawParameterValue (params::mode)->load() >= 0.5f ? VoiceMode::radical : VoiceMode::keepIdentity;
 }
 
-void VocalShiftEditor::setEngineMode (EngineMode m)
+void VocalShiftEditor::setVoiceMode (VoiceMode m)
 {
-    state.state.setProperty (params::propEngineMode, (int) m, nullptr);
-    shownEngineMode = m;
-    refreshEasyPage();
+    if (auto* param = state.getParameter (params::mode))
+    {
+        param->beginChangeGesture();
+        param->setValueNotifyingHost (param->convertTo0to1 ((float) (int) m));
+        param->endChangeGesture();
+    }
+    shownVoiceMode = m;
+    refreshModeButtons();
 }
 
-void VocalShiftEditor::refreshEasyPage()
+void VocalShiftEditor::refreshModeButtons()
 {
-    const bool morph = shownEngineMode == EngineMode::voiceMorphDsp;
-    identityButton.setToggleState (! morph, dontSendNotification);
-    morphButton.setToggleState (morph, dontSendNotification);
-
-    if (morph)
-    {
-        easyIntensity.label.setText (u8s ("Carácter (formantes)"), dontSendNotification);
-        attachKnob (easyIntensity, params::formantShift);
-        easySecond.label.setText ("Brillo", dontSendNotification);
-        attachKnob (easySecond, params::brightness);
-        modeDescription.setText (u8s ("Voice Morph (DSP): cambia el timbre desplazando formantes y el brillo, "
-                                      "sin cambiar la nota. No es conversión de identidad: el morph neuronal está en roadmap."),
-                                 dontSendNotification);
-    }
-    else
-    {
-        easyIntensity.label.setText (u8s ("Intensidad (semitonos)"), dontSendNotification);
-        attachKnob (easyIntensity, params::semitones);
-        easySecond.label.setText (u8s ("Naturalidad (preservar formantes)"), dontSendNotification);
-        attachKnob (easySecond, params::formantPreservation);
-        modeDescription.setText (u8s ("Identity Pitch: sube o baja la nota manteniendo la duración. "
-                                      "Naturalidad = cuánto se mantienen los formantes originales (100 % = timbre propio; 0 % = efecto ardilla/monstruo)."),
-                                 dontSendNotification);
-    }
-    const auto c = morph ? colours::morph : colours::accent;
-    for (auto* k : { &easyIntensity, &easySecond })
-        k->slider.setColour (Slider::rotarySliderFillColourId, c);
+    const bool radical = shownVoiceMode == VoiceMode::radical;
+    identityButton.setColour (TextButton::buttonColourId, radical ? colours::panel : colours::accent.darker (0.3f));
+    radicalButton.setColour (TextButton::buttonColourId, radical ? colours::morph.darker (0.3f) : colours::panel);
+    easyCharacter.slider.setColour (Slider::rotarySliderFillColourId, radical ? colours::morph : colours::accent);
+    modeDescription.setText (radical
+        ? u8s ("Transformación radical: los formantes siguen al tono y Carácter los empuja más lejos "
+               "(hasta 6 st) con brillo de hasta 6 dB. Cambia el carácter de la voz; no es conversión de identidad por IA.")
+        : u8s ("Conservar identidad: los formantes se mantienen casi en su sitio. Carácter solo añade un cambio "
+               "sutil de timbre (hasta 25 % de seguimiento, 1 st y 1.5 dB)."),
+        dontSendNotification);
+    repaint();
 }
 
 void VocalShiftEditor::setUiMode (bool pro)
 {
     proMode = pro;
     state.state.setProperty (params::propUiMode, pro ? "pro" : "easy", nullptr);
-    easyTab.setToggleState (! pro, dontSendNotification);
-    proTab.setToggleState (pro, dontSendNotification);
     easyTab.setColour (TextButton::buttonColourId, pro ? colours::panel : colours::accent.darker (0.3f));
     proTab.setColour (TextButton::buttonColourId, pro ? colours::accent.darker (0.3f) : colours::panel);
 
-    for (auto* k : { &easyIntensity, &easySecond, &easyMix, &easyGain })
+    for (auto* k : { &easyPitch, &easyCharacter, &easyMagic, &easyMix, &easyGain })
     {
         k->slider.setVisible (! pro);
         k->label.setVisible (! pro);
+        k->hint.setVisible (! pro);
     }
-    identityButton.setVisible (! pro);
-    morphButton.setVisible (! pro);
-    modeDescription.setVisible (! pro);
-
-    for (auto* k : { &proSemitones, &proFine, &proPreserve, &proFormant, &proBrightness, &proMix, &proGain })
+    for (auto* k : { &proPitch, &proFine, &proCharacter, &proMagic, &proFormant, &proBrightness, &proMix, &proGain })
     {
         k->slider.setVisible (pro);
         k->label.setVisible (pro);
     }
+    modeDescription.setVisible (! pro);
     safetyButton.setVisible (pro);
+    autoLevelButton.setVisible (pro);
     engineInfo.setVisible (pro);
     resized();
 }
@@ -265,7 +254,7 @@ void VocalShiftEditor::setUiMode (bool pro)
 void VocalShiftEditor::rebuildPresetMenu()
 {
     presetBox.clear (dontSendNotification);
-    presetBox.addSectionHeading ("Presets de fábrica (DSP)");
+    presetBox.addSectionHeading (u8s ("Presets de fábrica (DSP)"));
     const auto& fp = factoryPresets();
     for (size_t i = 0; i < fp.size(); ++i)
         presetBox.addItem (u8s (fp[i].name.c_str()), (int) i + factoryIdOffset);
@@ -279,6 +268,24 @@ void VocalShiftEditor::rebuildPresetMenu()
             presetBox.addItem (userPresetFiles[i].getFileNameWithoutExtension(), i + userIdOffset);
     }
     shownPresetId = {};
+}
+
+void VocalShiftEditor::syncPresetBox()
+{
+    const auto presetId = proc.getPresetManager().currentPresetId();
+    if (presetId == shownPresetId)
+        return;
+    shownPresetId = presetId;
+    const auto& fp = factoryPresets();
+    int selected = 0;
+    for (size_t i = 0; i < fp.size(); ++i)
+        if (presetId == String (fp[i].id))
+            selected = (int) i + factoryIdOffset;
+    if (presetId.startsWith ("user:"))
+        for (int i = 0; i < userPresetFiles.size(); ++i)
+            if (userPresetFiles[i].getFileNameWithoutExtension() == presetId.fromFirstOccurrenceOf ("user:", false, false))
+                selected = i + userIdOffset;
+    presetBox.setSelectedId (selected, dontSendNotification);
 }
 
 void VocalShiftEditor::onPresetChosen()
@@ -301,8 +308,6 @@ void VocalShiftEditor::onPresetChosen()
         if (idx < fp.size())
             proc.getPresetManager().applyFactoryPreset (fp[idx].id);
     }
-    shownEngineMode = engineMode();
-    refreshEasyPage();
 }
 
 void VocalShiftEditor::savePreset()
@@ -333,23 +338,21 @@ void VocalShiftEditor::loadPreset()
                 return;
             auto r = proc.getPresetManager().loadUserPreset (file);
             status.setText (r.wasOk() ? "Preset cargado: " + file.getFileName() : r.getErrorMessage(), dontSendNotification);
-            shownEngineMode = engineMode();
-            refreshEasyPage();
         });
 }
 
-String VocalShiftEditor::statusSummary() const
+String VocalShiftEditor::effectiveSummary() const
 {
-    const auto v = [this] (const char* id) { return state.getRawParameterValue (id)->load(); };
-    const float st = jlimit (-24.0f, 24.0f, v (params::semitones) + v (params::fineCents) / 100.0f);
+    // Shows what the macros actually do right now (same mapping the audio thread uses).
+    const auto e = mapMacros (proc.getCurrentVoiceParams());
+    if (state.getRawParameterValue (params::bypass)->load() >= 0.5f)
+        return "BYPASS activo (salida = entrada, alineada en latencia)";
     String s;
-    s << u8s ("Activo: tono ") << (st >= 0 ? "+" : "") << String (st, 2) << " st"
-      << u8s (" · formantes preservados ") << String (v (params::formantPreservation), 0) << " %"
-      << u8s (" · desplaz. formantes ") << String (v (params::formantShift), 1) << " st"
-      << u8s (" · brillo ") << String (v (params::brightness), 1) << " dB"
-      << u8s (" · mezcla ") << String (v (params::mix), 0) << " %";
-    if (v (params::bypass) >= 0.5f)
-        s = "BYPASS activo (salida = entrada, alineada en latencia)";
+    s << "Efectivo: tono " << (e.semitones >= 0 ? "+" : "") << String (e.semitones, 2) << " st"
+      << u8s (" · formantes siguen el ") << String (roundToInt ((1.0f - e.formantPreservation) * 100.0f)) << u8s (" % del tono")
+      << " y se desplazan " << String (e.formantShiftSemitones, 1) << " st"
+      << u8s (" · brillo ") << String (e.brightnessDb, 1) << " dB"
+      << u8s (" · compresión ") << String (1.0f + 3.0f * e.magic01, 1) << ":1, aire +" << String (5.0f * e.magic01, 1) << " dB";
     return s;
 }
 
@@ -360,31 +363,16 @@ void VocalShiftEditor::timerCallback()
     inMeter.setClipped (proc.inputClipped());
     outMeter.setClipped (proc.outputClipped());
 
-    // Reflect external state changes (preset load, project restore).
-    const auto mode = engineMode();
-    if (mode != shownEngineMode)
+    const auto mode = voiceMode();
+    if (mode != shownVoiceMode)
     {
-        shownEngineMode = mode;
-        refreshEasyPage();
+        shownVoiceMode = mode;
+        refreshModeButtons();
     }
-    const auto presetId = proc.getPresetManager().currentPresetId();
-    if (presetId != shownPresetId)
-    {
-        shownPresetId = presetId;
-        const auto& fp = factoryPresets();
-        int selected = 0;
-        for (size_t i = 0; i < fp.size(); ++i)
-            if (presetId == String (fp[i].id))
-                selected = (int) i + factoryIdOffset;
-        if (presetId.startsWith ("user:"))
-            for (int i = 0; i < userPresetFiles.size(); ++i)
-                if (userPresetFiles[i].getFileNameWithoutExtension() == presetId.fromFirstOccurrenceOf ("user:", false, false))
-                    selected = i + userIdOffset;
-        presetBox.setSelectedId (selected, dontSendNotification);
-    }
+    syncPresetBox();
 
     if (! status.getText().startsWith ("Preset"))
-        status.setText (statusSummary(), dontSendNotification);
+        status.setText (effectiveSummary(), dontSendNotification);
 
     const double sr = proc.getPreparedSampleRate();
     const int lat = proc.getEngineLatencySamples();
@@ -393,6 +381,7 @@ void VocalShiftEditor::timerCallback()
          << "Latencia reportada al host: " << lat << " muestras";
     if (sr > 0)
         info << " (" << String (1000.0 * lat / sr, 1) << " ms a " << String (sr / 1000.0, 1) << " kHz)";
+    info << u8s (" · nivel automático: ") << String (proc.getAutoLevelGainDb(), 1) << " dB";
     info << u8s ("\nNo apto para monitoreo en vivo: no existe todavía un modo de baja latencia.");
     if (proc.getNonFiniteEvents() > 0)
         info << u8s ("\nAviso: se silenciaron ") << proc.getNonFiniteEvents() << u8s (" bloques con valores no finitos.");
@@ -423,40 +412,52 @@ void VocalShiftEditor::resized()
     header.removeFromRight (4);
     saveButton.setBounds (header.removeFromRight (70).reduced (0, 4));
     header.removeFromRight (8);
-    presetBox.setBounds (header.removeFromRight (jmin (240, header.getWidth() / 2)).reduced (0, 4));
+    presetBox.setBounds (header.removeFromRight (jmin (260, header.getWidth() / 2)).reduced (0, 4));
     header.removeFromRight (8);
     proTab.setBounds (header.removeFromRight (60).reduced (0, 4));
     easyTab.setBounds (header.removeFromRight (60).reduced (0, 4));
 
     r.reduce (12, 8);
-    roadmap.setBounds (r.removeFromBottom (24));
+    roadmap.setBounds (r.removeFromBottom (22));
     status.setBounds (r.removeFromBottom (22));
     auto meters = r.removeFromRight (90);
     inMeter.setBounds (meters.removeFromLeft (45));
     outMeter.setBounds (meters);
     r.removeFromRight (12);
 
+    auto modeRow = r.removeFromTop (36);
+    identityButton.setBounds (modeRow.removeFromLeft (modeRow.getWidth() / 2).reduced (2));
+    radicalButton.setBounds (modeRow.reduced (2));
+
     if (! proMode)
     {
-        auto modeRow = r.removeFromTop (36);
-        identityButton.setBounds (modeRow.removeFromLeft (modeRow.getWidth() / 2).reduced (2));
-        morphButton.setBounds (modeRow.reduced (2));
-        modeDescription.setBounds (r.removeFromTop (44));
-        auto knobs = r.reduced (0, 8);
-        const int w = knobs.getWidth() / 4;
-        for (auto* k : { &easyIntensity, &easySecond, &easyMix, &easyGain })
+        modeDescription.setBounds (r.removeFromTop (40));
+        auto smallRow = r.removeFromBottom (110);
+        auto macros = r.reduced (0, 4);
+        const int w = macros.getWidth() / 3;
+        for (auto* k : { &easyPitch, &easyCharacter, &easyMagic })
         {
-            auto cell = knobs.removeFromLeft (w).reduced (6);
-            const int side = jmin (cell.getWidth(), cell.getHeight() - 36, 220);
-            cell = cell.withSizeKeepingCentre (cell.getWidth(), side + 36);
-            k->label.setBounds (cell.removeFromTop (36));
+            auto cell = macros.removeFromLeft (w).reduced (8, 0);
+            k->label.setBounds (cell.removeFromTop (26));
+            k->hint.setBounds (cell.removeFromBottom (32));
+            const int side = jmin (cell.getWidth(), cell.getHeight(), 230);
             k->slider.setBounds (cell.withSizeKeepingCentre (side, side));
+        }
+        const int sw = jmin (160, smallRow.getWidth() / 2);
+        auto smallArea = smallRow.withSizeKeepingCentre (sw * 2, smallRow.getHeight());
+        for (auto* k : { &easyMix, &easyGain })
+        {
+            auto cell = smallArea.removeFromLeft (sw).reduced (6, 0);
+            k->label.setBounds (cell.removeFromTop (18));
+            k->slider.setBounds (cell);
         }
     }
     else
     {
-        auto infoArea = r.removeFromBottom (72);
-        safetyButton.setBounds (infoArea.removeFromTop (24));
+        r.removeFromTop (6);
+        auto infoArea = r.removeFromBottom (110);
+        safetyButton.setBounds (infoArea.removeFromTop (22));
+        autoLevelButton.setBounds (infoArea.removeFromTop (22));
         engineInfo.setBounds (infoArea);
         auto top = r.removeFromTop (r.getHeight() / 2);
         auto layoutRow = [] (Rectangle<int> row, std::initializer_list<Knob*> ks) {
@@ -468,8 +469,8 @@ void VocalShiftEditor::resized()
                 k->slider.setBounds (cell);
             }
         };
-        layoutRow (top, { &proSemitones, &proFine, &proPreserve, &proFormant });
-        layoutRow (r, { &proBrightness, &proMix, &proGain });
+        layoutRow (top, { &proPitch, &proFine, &proCharacter, &proMagic });
+        layoutRow (r, { &proFormant, &proBrightness, &proMix, &proGain });
     }
 }
 

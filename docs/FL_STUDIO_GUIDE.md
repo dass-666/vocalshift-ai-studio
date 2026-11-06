@@ -23,19 +23,22 @@ installed plugins** (o *Find more plugins*). Busca "VocalShift AI Studio" en la 
 ## 4. Insertar en el Mixer
 1. Arrastra una voz (WAV) al Playlist o al Channel rack y envíala a una pista del **Mixer** (por ejemplo Insert 1).
 2. En la pista del Mixer, en un slot vacío → *Select* → **VocalShift AI Studio**.
-3. Reproduce. Por defecto el preset es *Neutro*: no debe cambiar nada (salvo 150 ms de retardo compensado).
+3. Reproduce. Una instancia nueva arranca en los **valores de referencia** (+7 st, Carácter 65 %, Magia 70 %,
+   Conservar identidad). Para comparar con el original usa **Bypass** o el preset *Neutro*.
 
 ## 5. Pruebas rápidas (10 minutos)
-1. **Modo Fácil → Identity Pitch**: gira *Intensidad* a +3, +7, +12 y −7. La duración no debe cambiar.
-2. **Naturalidad** a 100 % y luego a 0 % con +7: el 0 % debe sonar a "ardilla".
-3. Recorre los 7 **presets** del selector.
-4. **Voice Morph (DSP)**: mueve *Carácter* y *Brillo* sin cambio de nota.
+1. **Pitch**: +3, +7, +12 y −7. La duración no debe cambiar.
+2. **Carácter** de 0 % a 100 % en *Conservar identidad* y después en *Transformación radical*.
+3. **Magia** 0 % vs 70 %: con el nivel automático el volumen debería parecerse; escucha el pulido y las "s".
+4. Recorre los **presets** del selector.
 5. **Bypass** varias veces durante la reproducción: no debe haber clics ni saltos de tiempo.
 6. **Mezcla** al 50 % y **Ganancia**: observa los medidores IN/OUT y el indicador CLIP (clic para borrarlo).
-7. **Automatización**: clic derecho sobre *Transposición* en modo Pro → *Create automation clip*.
-8. Guarda el proyecto, ciérralo y ábrelo: los valores y el preset deben volver igual.
-9. Cambia el tamaño de la ventana del plugin y alterna Fácil/Pro.
+7. **Automatización**: clic derecho sobre Pitch → *Create automation clip*. El modo también es automatizable.
+8. Guarda el proyecto, ciérralo y ábrelo: los valores, el modo y el preset deben volver igual.
+9. Cambia el tamaño de la ventana y alterna Fácil/Pro (en Pro se ven los valores efectivos de cada macro).
 10. Exporta (*File → Export → WAV*) y compara con lo que oías en reproducción.
+
+El protocolo detallado con puntuaciones está en `EXPERIMENT_01_VOZ_REAL.md`.
 
 ## 6. Qué reportar
 Versión de FL Studio, tamaño de buffer (*Options → Audio settings*), frecuencia de muestreo, CPU que muestra FL,
@@ -44,5 +47,6 @@ y cualquier: fallo al escanear, cuelgue, clic, desincronización con otras pista
 ## Limitaciones conocidas
 - Latencia de 150 ms: FL la compensa en reproducción, pero **no sirve para monitorear en directo** mientras grabas.
 - Consonantes y ataques pueden sonar suavizados, sobre todo con transposiciones grandes.
-- Al transponer con formantes preservados la salida baja de volumen; compensa con *Ganancia*.
-- Voice Morph es DSP (formantes + brillo). La IA neuronal no está implementada.
+- El nivel automático compensa la pérdida de volumen por transposición; si lo desactivas (Pro), compensa con *Ganancia*.
+- Transformación radical es DSP (formantes + brillo). La IA neuronal no está implementada.
+- El mapeo de Carácter y Magia es provisional, pendiente de tus escuchas.

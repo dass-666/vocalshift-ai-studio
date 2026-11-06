@@ -15,9 +15,8 @@ VocalShiftProcessor::VocalShiftProcessor()
 {
     raw.bind (apvts);
     apvts.state.setProperty (params::propStateVersion, params::currentStateVersion, nullptr);
-    apvts.state.setProperty (params::propEngineMode, (int) EngineMode::identityPitch, nullptr);
     apvts.state.setProperty (params::propUiMode, "easy", nullptr);
-    apvts.state.setProperty (params::propPresetId, "neutral", nullptr);
+    apvts.state.setProperty (params::propPresetId, "reference", nullptr); // defaults == "reference" preset
 }
 
 bool VocalShiftProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -101,10 +100,25 @@ void VocalShiftProcessor::getStateInformation (MemoryBlock& destData)
 ValueTree VocalShiftProcessor::migrateState (ValueTree state)
 {
     const int version = state.getProperty (params::propStateVersion, 0);
-    // Version 0 = no version tag (should not exist in the wild). Future
-    // migrations go here, one step at a time: if (version < 2) { ... }
-    if (version < 1)
-        state.setProperty (params::propStateVersion, 1, nullptr);
+    if (version < 2)
+    {
+        // v1 -> v2: "engineMode" property became the automatable "mode" parameter;
+        // "formantPreserve" was replaced by the Character macro (dropped: no shipped users).
+        const int legacyMode = state.getProperty (params::legacyPropEngineMode, 0);
+        bool found = false;
+        for (auto child : state)
+            if (child.hasType ("PARAM") && child.getProperty ("id").toString() == params::mode)
+                found = true;
+        if (! found)
+        {
+            ValueTree p ("PARAM");
+            p.setProperty ("id", params::mode, nullptr);
+            p.setProperty ("value", legacyMode == 1 ? 1.0f : 0.0f, nullptr);
+            state.appendChild (p, nullptr);
+        }
+        state.removeProperty (params::legacyPropEngineMode, nullptr);
+    }
+    state.setProperty (params::propStateVersion, params::currentStateVersion, nullptr);
     return state;
 }
 
@@ -117,10 +131,8 @@ void VocalShiftProcessor::setStateInformation (const void* data, int sizeInBytes
     auto tree = ValueTree::fromXml (*xml);
     const int version = tree.getProperty (params::propStateVersion, 0);
     if (version > params::currentStateVersion)
-    {
-        // Saved by a newer plugin version: load what we understand.
-        DBG ("VocalShift: state version " << version << " is newer than supported");
-    }
+        DBG ("VocalShift: state version " << version << " is newer than supported; loading known parameters");
+    // Parameters missing from an old state keep their defaults (APVTS behaviour).
     apvts.replaceState (migrateState (tree));
 }
 

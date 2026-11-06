@@ -12,7 +12,7 @@ Tres niveles distintos, que no deben confundirse:
 
 `ctest` ejecuta dos binarios. Imprimen sus mediciones (`measure:`), así que el log de CI es también un registro.
 
-**vs_core_tests (14 pruebas, motor sin JUCE)**
+**vs_core_tests (19 pruebas, motor sin JUCE)**
 - F0 a −24, −12, −7, −3, +3, +7, +12, +24 st (tono armónico 220 Hz, YIN). Criterio < 15 cents.
 - Ajuste fino +50 / −25 cents. Criterio < 6 cents.
 - Latencia reportada = retardo medido; duración de una ráfaga de 0.5 s preservada (44.1/48/96 kHz).
@@ -28,9 +28,15 @@ Tres niveles distintos, que no deben confundirse:
 - Bypass: sin escalón mayor que la señal (seno 220 Hz), salida = entrada retardada (error < 1e-6).
 - Saltos aleatorios de ±24 st cada 10 ms: acotado y finito.
 - Cada preset: reproducible, distinto del neutro y con el F0 declarado (±20 cents).
-- Rendimiento: factor de tiempo real.
+- Rendimiento: factor de tiempo real (motor solo y cadena completa con macros de referencia).
+- Macros: valores de referencia, reglas de mapeo (Carácter 0 = timbre intacto, radical > identidad, monotonía,
+  dirección según el tono, continuidad al cruzar 0 st).
+- Macros de referencia en ambos modos: F0 +7 st correcto; el modo radical mueve más el timbre.
+- Magia: 0 % = bypass exacto bit a bit; 70 % reduce el rango dinámico ≥ 3 dB y añade energía en agudos.
+- Nivel automático: compensa la pérdida a +12 st (±1.5 dB) y nunca sube el silencio.
+- Cambio de modo y macros aleatorias durante la reproducción: finito y acotado.
 
-**vs_plugin_tests (9 pruebas, procesador JUCE real)**: ida y vuelta del estado completo, datos corruptos ignorados,
+**vs_plugin_tests (12 pruebas, procesador JUCE real)**: valores de referencia en una instancia nueva, migración de estado v1→v2, cada macro y el modo cambian la salida, ida y vuelta del estado completo, datos corruptos ignorados,
 presets de fábrica exactos, presets de usuario en disco con control de versión, mono/estéreo × 44.1–96 kHz × bloques
 32–2048 (incl. 333), bloques mayores que los anunciados y de 0 muestras, reinicio y `reset()` a mitad, bypass por
 parámetro y por host, render offline = render en tiempo real, cambios de preset y bypass durante la reproducción.
@@ -54,12 +60,15 @@ parámetro y por host, render offline = render en tiempo real, cambios de preset
 
 1. **Transitorios y consonantes** (p, t, k, s) se suavizan/emborronan; esperable en un motor espectral.
 2. **Latencia de 150 ms**: no sirve para monitorear mientras se graba. En reproducción FL Studio la compensa (PDC).
-3. **Pérdida de volumen** con transposición grande y formantes preservados (ver arriba).
+3. **Pérdida de volumen** con transposición grande y formantes preservados (ver arriba). Mitigada por el *nivel
+   automático* (activado por defecto); sin él sigue ocurriendo.
 4. **Formantes**: la estimación es aproximada (lo reconoce el autor de Signalsmith); voces muy graves/agudas o con
    mucha respiración pueden dar un timbre "filtrado".
 5. **±24 st** es una prueba de estrés: espera artefactos claros. −24 st sobre una voz grave queda por debajo de 40 Hz.
 6. **Voice Morph DSP** cambia el carácter (formantes + brillo), no la identidad de la persona.
 7. Las vocales sintéticas no sustituyen a voces reales: ninguna métrica aquí mide naturalidad.
+8. **Mapeo de macros provisional**: los máximos de Carácter y la curva de Magia no se han calibrado con escuchas.
+9. **Magia** es básica (compresor + shelf). Puede acentuar sibilantes al subir agudos; no hay de-esser.
 
 ## QualityBench (renders A/B)
 

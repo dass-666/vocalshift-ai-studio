@@ -119,7 +119,7 @@ int main (int argc, char** argv)
         // Renders the real editor (Easy and Pro pages) to PNG, for documentation/visual checks.
         vs::VocalShiftProcessor p;
         p.prepareToPlay (48000, 512);
-        p.getPresetManager().applyFactoryPreset ("high_natural");
+        p.getPresetManager().applyFactoryPreset ("reference");
         for (auto mode : { "easy", "pro" })
         {
             p.getState().state.setProperty (vs::params::propUiMode, mode, nullptr);
@@ -177,14 +177,27 @@ int main (int argc, char** argv)
 
         struct Case { String label; std::function<void (vs::VocalShiftProcessor&)> setup; float expectSt; };
         std::vector<Case> cases;
+        auto setP = [] (vs::VocalShiftProcessor& p, const char* id, float v) {
+            auto* prm = p.getState().getParameter (id);
+            prm->setValueNotifyingHost (prm->convertTo0to1 (v));
+        };
+        // Pure pitch engine: Character 0 (formants fully preserved), Magia 0, auto level off.
+        // The 'Ajuste RMS' column therefore shows the engine's own level change.
         for (int st : { -24, -12, -7, -3, 3, 7, 12, 24 })
             cases.push_back ({ String ("pitch_") + (st > 0 ? "+" : "") + String (st) + "st_preserve100",
-                               [st] (vs::VocalShiftProcessor& p) {
-                                   auto* prm = p.getState().getParameter (vs::params::semitones);
-                                   prm->setValueNotifyingHost (prm->convertTo0to1 ((float) st));
+                               [st, setP] (vs::VocalShiftProcessor& p) {
+                                   setP (p, vs::params::semitones, (float) st);
+                                   setP (p, vs::params::character, 0);
+                                   setP (p, vs::params::magic, 0);
+                                   setP (p, vs::params::autoLevel, 0);
                                }, (float) st });
+        // Experiment 01 (reference macros): isolate the effect of mode, Character and Magia.
+        cases.push_back ({ "exp01_A_ref_identidad_+7_65_70", [] (vs::VocalShiftProcessor&) {}, 7.0f });
+        cases.push_back ({ "exp01_B_ref_radical_+7_65_70", [setP] (vs::VocalShiftProcessor& p) { setP (p, vs::params::mode, 1); }, 7.0f });
+        cases.push_back ({ "exp01_C_identidad_+7_65_magia0", [setP] (vs::VocalShiftProcessor& p) { setP (p, vs::params::magic, 0); }, 7.0f });
+        cases.push_back ({ "exp01_D_identidad_+7_caracter0_70", [setP] (vs::VocalShiftProcessor& p) { setP (p, vs::params::character, 0); }, 7.0f });
         for (const auto& fp : vs::factoryPresets())
-            if (fp.id != "neutral")
+            if (fp.id != "neutral" && fp.id != "reference")
                 cases.push_back ({ String ("preset_") + fp.id,
                                    [id = fp.id] (vs::VocalShiftProcessor& p) { p.getPresetManager().applyFactoryPreset (id); },
                                    fp.params.totalSemitones() });

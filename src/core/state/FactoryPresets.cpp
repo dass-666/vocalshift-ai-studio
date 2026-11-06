@@ -10,45 +10,51 @@ float VoiceParams::totalSemitones() const
     return std::clamp (semitones + fineCents / 100.0f, -24.0f, 24.0f);
 }
 
-static VoiceParams make (float st, float preserve, float formant, float bright, float gainDb = 0.0f)
+static VoiceParams make (VoiceMode mode, float st, float character, float magic,
+                         float formantOffset = 0.0f, float brightnessOffset = 0.0f)
 {
     VoiceParams p;
+    p.mode = mode;
     p.semitones = st;
-    p.formantPreservation = preserve;
-    p.formantShift = formant;
-    p.brightnessDb = bright;
-    p.outputGainDb = gainDb;
+    p.character = character;
+    p.magic = magic;
+    p.formantOffset = formantOffset;
+    p.brightnessOffset = brightnessOffset;
     return p;
 }
 
 const std::vector<FactoryPreset>& factoryPresets()
 {
-    // Every value here is a real, implemented parameter. Nothing in a preset
-    // depends on unimplemented processing.
+    using M = VoiceMode;
+    // Every value is a real, implemented parameter. Character/Magic mappings are
+    // provisional and must be calibrated with human-voice listening tests.
     static const std::vector<FactoryPreset> presets {
-        { "neutral", "Neutro (sin cambio)", "Punto de partida: sin transposicion ni cambio de timbre.",
-          EngineMode::identityPitch, make (0, 100, 0, 0) },
+        { "reference", "Referencia (+7 · 65 % · 70 %)", "Valores de referencia del proyecto: +7 st, Carácter 65 %, Magia 70 %, conservando identidad.",
+          make (M::keepIdentity, 7, 65, 70) },
 
-        { "high_natural", "Agudo natural", "+4 semitonos con formantes preservados.",
-          EngineMode::identityPitch, make (4, 100, 0, 0) },
+        { "neutral", "Neutro (sin cambio)", "Sin transposición, sin cambio de timbre y sin mejoras.",
+          make (M::keepIdentity, 0, 0, 0) },
 
-        { "high_intense", "Agudo intenso", "+9 semitonos; los formantes siguen parcialmente el tono (60 % preservado).",
-          EngineMode::identityPitch, make (9, 60, 0, 1.5f, -1.0f) },
+        { "high_natural", "Agudo natural", "+4 st, timbre casi intacto, mejoras suaves.",
+          make (M::keepIdentity, 4, 15, 40) },
 
-        { "low_natural", "Grave natural", "-4 semitonos con formantes preservados.",
-          EngineMode::identityPitch, make (-4, 100, 0, 0) },
+        { "high_intense", "Agudo intenso", "+9 st en modo radical con carácter moderado.",
+          make (M::radical, 9, 35, 60) },
 
-        { "low_deep", "Grave profundo", "-9 semitonos, formantes 75 % preservados y desplazados -1.5 st.",
-          EngineMode::identityPitch, make (-9, 75, -1.5f, -1.5f) },
+        { "low_natural", "Grave natural", "-4 st, timbre casi intacto, mejoras suaves.",
+          make (M::keepIdentity, -4, 15, 40) },
 
-        { "bright_voice", "Voz brillante", "Sin cambio de tono: formantes +2.5 st y brillo +4 dB (Morph DSP).",
-          EngineMode::voiceMorphDsp, make (0, 100, 2.5f, 4.0f, -1.5f) },
+        { "low_deep", "Grave profundo", "-9 st conservando identidad con carácter alto.",
+          make (M::keepIdentity, -9, 80, 60) },
 
-        { "dark_voice", "Voz oscura", "Sin cambio de tono: formantes -2.5 st y brillo -4 dB (Morph DSP).",
-          EngineMode::voiceMorphDsp, make (0, 100, -2.5f, -4.0f) },
+        { "bright_voice", "Voz brillante", "Misma nota; modo radical: formantes y brillo hacia arriba.",
+          make (M::radical, 0, 45, 50) },
 
-        { "creative_extreme", "Efecto creativo extremo", "-12 semitonos, formantes siguen el tono y bajan 4 st extra: voz de monstruo.",
-          EngineMode::voiceMorphDsp, make (-12, 0, -4.0f, 2.0f) },
+        { "dark_voice", "Voz oscura", "Misma nota; ajustes finos de formantes -2.5 st y brillo -4 dB.",
+          make (M::keepIdentity, 0, 0, 50, -2.5f, -4.0f) },
+
+        { "creative_extreme", "Efecto creativo extremo", "-12 st, modo radical al 100 %: voz de monstruo.",
+          make (M::radical, -12, 100, 50) },
     };
     return presets;
 }

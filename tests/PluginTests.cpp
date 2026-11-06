@@ -71,14 +71,16 @@ TEST ("state: full round trip of parameters and non-parameter state")
     VocalShiftProcessor a;
     setParam (a, vs::params::semitones, -7);
     setParam (a, vs::params::fineCents, 33);
-    setParam (a, vs::params::formantPreservation, 42.5f);
+    setParam (a, vs::params::character, 42.5f);
+    setParam (a, vs::params::magic, 12.5f);
+    setParam (a, vs::params::mode, 1);
+    setParam (a, vs::params::autoLevel, 0);
     setParam (a, vs::params::formantShift, 3.25f);
     setParam (a, vs::params::brightness, -5.5f);
     setParam (a, vs::params::mix, 61);
     setParam (a, vs::params::outputGain, -3.5f);
     setParam (a, vs::params::safetyClip, 0);
     setParam (a, vs::params::bypass, 1);
-    a.getState().state.setProperty (vs::params::propEngineMode, 1, nullptr);
     a.getState().state.setProperty (vs::params::propUiMode, "pro", nullptr);
     a.getState().state.setProperty (vs::params::propPresetId, "dark_voice", nullptr);
 
@@ -88,10 +90,10 @@ TEST ("state: full round trip of parameters and non-parameter state")
 
     VocalShiftProcessor b;
     b.setStateInformation (mb.getData(), (int) mb.getSize());
-    for (auto* id : { vs::params::semitones, vs::params::fineCents, vs::params::formantPreservation, vs::params::formantShift,
+    for (auto* id : { vs::params::mode, vs::params::character, vs::params::magic, vs::params::autoLevel,
+                      vs::params::semitones, vs::params::fineCents, vs::params::formantShift,
                       vs::params::brightness, vs::params::mix, vs::params::outputGain, vs::params::safetyClip, vs::params::bypass })
         CHECK_MSG (std::abs (getParam (a, id) - getParam (b, id)) < 1e-4f, "%s: %f vs %f", id, getParam (a, id), getParam (b, id));
-    CHECK ((int) b.getState().state.getProperty (vs::params::propEngineMode) == 1);
     CHECK (b.getState().state.getProperty (vs::params::propUiMode).toString() == "pro");
     CHECK (b.getState().state.getProperty (vs::params::propPresetId).toString() == "dark_voice");
     CHECK ((int) b.getState().state.getProperty (vs::params::propStateVersion) == vs::params::currentStateVersion);
@@ -123,11 +125,12 @@ TEST ("presets: factory presets set exactly their declared values")
     {
         CHECK (p.getPresetManager().applyFactoryPreset (fp.id));
         CHECK (std::abs (getParam (p, vs::params::semitones) - fp.params.semitones) < 1e-4f);
-        CHECK (std::abs (getParam (p, vs::params::formantPreservation) - fp.params.formantPreservation) < 0.051f);
-        CHECK (std::abs (getParam (p, vs::params::formantShift) - fp.params.formantShift) < 0.006f);
-        CHECK (std::abs (getParam (p, vs::params::brightness) - fp.params.brightnessDb) < 0.006f);
+        CHECK (std::abs (getParam (p, vs::params::character) - fp.params.character) < 0.051f);
+        CHECK (std::abs (getParam (p, vs::params::magic) - fp.params.magic) < 0.051f);
+        CHECK (std::abs (getParam (p, vs::params::formantShift) - fp.params.formantOffset) < 0.006f);
+        CHECK (std::abs (getParam (p, vs::params::brightness) - fp.params.brightnessOffset) < 0.006f);
         CHECK (std::abs (getParam (p, vs::params::outputGain) - fp.params.outputGainDb) < 0.006f);
-        CHECK ((int) p.getState().state.getProperty (vs::params::propEngineMode) == (int) fp.mode);
+        CHECK ((int) getParam (p, vs::params::mode) == (int) fp.params.mode);
         CHECK (p.getPresetManager().currentPresetId() == juce::String (fp.id));
     }
     CHECK (! p.getPresetManager().applyFactoryPreset ("does_not_exist"));
@@ -275,6 +278,74 @@ TEST ("host: preset changes and automation while playing stay finite")
             setParam (p, vs::params::bypass, (pos / 2560) % 5 == 0 ? 1.0f : 0.0f);
     }, &finite);
     CHECK (finite);
+}
+
+TEST ("defaults: a new instance starts at the reference values (+7 st, 65 %, 70 %, keep identity)")
+{
+    VocalShiftProcessor p;
+    CHECK (getParam (p, vs::params::semitones) == 7.0f);
+    CHECK (std::abs (getParam (p, vs::params::character) - 65.0f) < 1e-4f);
+    CHECK (std::abs (getParam (p, vs::params::magic) - 70.0f) < 1e-4f);
+    CHECK (getParam (p, vs::params::mode) == 0.0f);
+    CHECK (getParam (p, vs::params::autoLevel) == 1.0f);
+    CHECK (p.getPresetManager().currentPresetId() == "reference");
+    const auto* ref = vs::findFactoryPreset ("reference");
+    CHECK (ref != nullptr && ref->params.semitones == 7.0f && ref->params.character == 65.0f && ref->params.magic == 70.0f);
+}
+
+TEST ("state: v1 project state (engineMode property, formantPreserve) migrates to v2")
+{
+    // Hand-built v1 state as the first prototype saved it.
+    juce::ValueTree v1 ("VocalShiftState");
+    v1.setProperty ("stateVersion", 1, nullptr);
+    v1.setProperty ("engineMode", 1, nullptr);
+    v1.setProperty ("presetId", "dark_voice", nullptr);
+    auto addParam = [&] (const char* id, float value) {
+        juce::ValueTree c ("PARAM");
+        c.setProperty ("id", id, nullptr);
+        c.setProperty ("value", value, nullptr);
+        v1.appendChild (c, nullptr);
+    };
+    addParam ("semitones", -3.0f);
+    addParam ("formantPreserve", 40.0f); // obsolete parameter
+    addParam ("mix", 80.0f);
+    juce::MemoryBlock mb;
+    juce::AudioProcessor::copyXmlToBinary (*v1.createXml(), mb);
+
+    VocalShiftProcessor p;
+    p.setStateInformation (mb.getData(), (int) mb.getSize());
+    CHECK (getParam (p, vs::params::semitones) == -3.0f);
+    CHECK (std::abs (getParam (p, vs::params::mix) - 80.0f) < 0.051f);
+    CHECK (getParam (p, vs::params::mode) == 1.0f); // engineMode=1 -> radical
+    CHECK ((int) p.getState().state.getProperty (vs::params::propStateVersion) == 2);
+    CHECK (! p.getState().state.hasProperty (vs::params::legacyPropEngineMode));
+    // Parameters absent from v1 (character/magic) keep their defaults.
+    CHECK (std::abs (getParam (p, vs::params::character) - 65.0f) < 1e-4f);
+}
+
+TEST ("macros: changing Pitch/Character/Magic/mode on the processor changes the output")
+{
+    const auto v = vowel (48000, 190, 2.0);
+    auto renderWith = [&] (const std::function<void (VocalShiftProcessor&)>& setup) {
+        VocalShiftProcessor p;
+        setup (p);
+        p.prepareToPlay (48000, 512);
+        return render (p, v, 512);
+    };
+    const auto ref = renderWith ([] (VocalShiftProcessor&) {});
+    auto diffDb = [&] (const std::vector<float>& a) {
+        double d = 0, r = 0;
+        for (size_t i = 0; i < a.size(); ++i) { d += (double) (a[i] - ref[i]) * (a[i] - ref[i]); r += (double) ref[i] * ref[i]; }
+        return 10 * std::log10 ((d + 1e-20) / (r + 1e-20));
+    };
+    const double dPitch = diffDb (renderWith ([] (auto& p) { setParam (p, vs::params::semitones, 3); }));
+    const double dChar = diffDb (renderWith ([] (auto& p) { setParam (p, vs::params::character, 0); }));
+    const double dMagic = diffDb (renderWith ([] (auto& p) { setParam (p, vs::params::magic, 0); }));
+    const double dMode = diffDb (renderWith ([] (auto& p) { setParam (p, vs::params::mode, 1); }));
+    MEASURE ("difference vs reference render: Pitch 7->3 %.1f dB, Character 65->0 %.1f dB, Magic 70->0 %.1f dB, mode->radical %.1f dB",
+             dPitch, dChar, dMagic, dMode);
+    // Every macro must audibly change the signal (none is decorative).
+    CHECK (dPitch > -20.0 && dChar > -30.0 && dMagic > -30.0 && dMode > -30.0);
 }
 
 int main (int argc, char** argv)

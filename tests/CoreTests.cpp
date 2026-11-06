@@ -8,6 +8,8 @@
 #include <core/analysis/PitchDetector.h>
 #include <core/dsp/SignalsmithPitchShifter.h>
 #include <core/mix/VocalMixEngine.h>
+#include <core/enhance/VocalEnhancer.h>
+#include <core/state/MacroMapping.h>
 #include <core/state/FactoryPresets.h>
 
 #include <algorithm>
@@ -44,11 +46,15 @@ namespace
 {
 using Signal = std::vector<float>;
 
-vs::VoiceParams pitchParams (float st, float preservation = 100.0f)
+// Low-level engine settings: measures the pitch/formant engine alone
+// (no Magia, no auto level, no clipper). Macros are tested separately.
+vs::EngineSettings pitchParams (float st, float preservation = 100.0f)
 {
-    vs::VoiceParams p;
+    vs::EngineSettings p;
     p.semitones = st;
-    p.formantPreservation = preservation;
+    p.formantPreservation = preservation / 100.0f;
+    p.magic01 = 0.0f;
+    p.autoLevel = false;
     p.safetyClip = false; // measure the engine, not the clipper
     return p;
 }
@@ -119,7 +125,7 @@ TEST ("pitch: F0 moves by requested interval (220 Hz harmonic tone, 48 kHz)")
     for (float st : { -24.f, -12.f, -7.f, -3.f, 3.f, 7.f, 12.f, 24.f })
     {
         vs::VocalChain chain;
-        chain.setParams (pitchParams (st, 0.0f), false);
+        chain.setEngineSettings (pitchParams (st, 0.0f), false);
         chain.prepare (fs, 1, 512);
         auto out = run (chain, { tone }, 512);
         const int lat = chain.latencySamples();
@@ -142,8 +148,8 @@ TEST ("pitch: fine control (+0.5 st and -0.25 st)")
     {
         vs::VocalChain chain;
         auto p = pitchParams (0.0f, 0.0f);
-        p.fineCents = cents;
-        chain.setParams (p, false);
+        p.semitones += cents / 100.0f;
+        chain.setEngineSettings (p, false);
         chain.prepare (fs, 1, 256);
         auto out = run (chain, { tone }, 256);
         auto mid = segment (out[0], chain.latencySamples() + (int) fs / 2, (int) fs);
@@ -168,7 +174,7 @@ TEST ("timing: reported latency matches measured delay; duration preserved")
         for (float st : { 0.f, 7.f, -12.f })
         {
             vs::VocalChain chain;
-            chain.setParams (pitchParams (st, 0.0f), false);
+            chain.setEngineSettings (pitchParams (st, 0.0f), false);
             chain.prepare (fs, 1, 480);
             auto out = run (chain, { x }, 480);
             const int lat = chain.latencySamples();
@@ -189,7 +195,7 @@ TEST ("timing: reported latency matches measured delay; duration preserved")
 TEST ("safety: silence in -> silence out, no noise floor")
 {
     vs::VocalChain chain;
-    chain.setParams (pitchParams (12.0f), false);
+    chain.setEngineSettings (pitchParams (12.0f), false);
     chain.prepare (48000, 2, 512);
     Signal z ((size_t) 48000 * 3, 0.0f);
     auto out = run (chain, { z, z }, 512);
@@ -199,7 +205,7 @@ TEST ("safety: silence in -> silence out, no noise floor")
 
     // Silence after signal must decay to silence (no stuck tails / noise).
     vs::VocalChain chain2;
-    chain2.setParams (pitchParams (-7.0f), false);
+    chain2.setEngineSettings (pitchParams (-7.0f), false);
     chain2.prepare (48000, 1, 512);
     Signal x ((size_t) 48000 * 4, 0.0f);
     const auto t = harmonicTone (48000, 180, 1.0);
@@ -226,16 +232,17 @@ TEST ("safety: no NaN/inf and bounded peaks under hostile input and automation")
         chain.prepare (fs, 2, 256);
         std::mt19937 rng (99);
         auto out = run (chain, { noise, square }, 256, [&] (int) {
-            vs::VoiceParams p;
-            p.semitones = (float) ((int) (rng() % 49) - 24);
-            p.fineCents = (float) ((int) (rng() % 201) - 100);
-            p.formantPreservation = (float) (rng() % 101);
-            p.formantShift = (float) ((int) (rng() % 25) - 12);
+            vs::EngineSettings p;
+            p.semitones = (float) ((int) (rng() % 4801) - 2400) / 100.0f;
+            p.formantPreservation = (float) (rng() % 101) / 100.0f;
+            p.formantShiftSemitones = (float) ((int) (rng() % 25) - 12);
             p.brightnessDb = (float) ((int) (rng() % 25) - 12);
-            p.mixPercent = (float) (rng() % 101);
+            p.magic01 = (float) (rng() % 101) / 100.0f;
+            p.autoLevel = (rng() % 2) == 0;
+            p.mix01 = (float) (rng() % 101) / 100.0f;
             p.outputGainDb = 0.0f;
             p.safetyClip = clip;
-            chain.setParams (p, (rng() % 13) == 0);
+            chain.setEngineSettings (p, (rng() % 13) == 0);
         });
         const float peak = std::max (vs::peakAbs (out[0].data(), n), vs::peakAbs (out[1].data(), n));
         MEASURE ("safetyClip=%d: full-scale noise/square, random automation every 256 samples: peak out = %.3f (%.1f dBFS), nonFiniteEvents=%d",
@@ -250,7 +257,7 @@ TEST ("safety: no NaN/inf and bounded peaks under hostile input and automation")
 
     // NaN injected at the input must never reach the output.
     vs::VocalChain chain;
-    chain.setParams (pitchParams (5.0f), false);
+    chain.setEngineSettings (pitchParams (5.0f), false);
     chain.prepare (fs, 1, 128);
     auto x = harmonicTone (fs, 200, 1.0);
     x[1000] = std::numeric_limits<float>::quiet_NaN();
@@ -278,8 +285,11 @@ TEST ("realtime: zero heap allocations inside process() and setParams()")
     {
         vs::VoiceParams p;
         p.semitones = (float) ((pos / 4096) % 25 - 12);
-        p.formantShift = (float) ((pos / 8192) % 7 - 3);
-        p.brightnessDb = 3.0f;
+        p.formantOffset = (float) ((pos / 8192) % 7 - 3);
+        p.brightnessOffset = 3.0f;
+        p.character = (float) ((pos / 3000) % 101);
+        p.magic = (float) ((pos / 5000) % 101);
+        p.mode = (pos / 7000) % 2 ? vs::VoiceMode::radical : vs::VoiceMode::keepIdentity;
         chain.setParams (p, (pos / 20000) % 2 == 1);
         ptrs[0] = in[0].data() + pos; ptrs[1] = in[1].data() + pos;
         chain.process (ptrs.data(), 2, block);
@@ -297,7 +307,7 @@ TEST ("determinism: output independent of host block size (incl. random sizes)")
     const auto v = vowel (fs, 200, 2.0);
     auto render = [&] (int bs, uint32_t seed) {
         vs::VocalChain chain;
-        chain.setParams (pitchParams (5.0f), false);
+        chain.setEngineSettings (pitchParams (5.0f), false);
         chain.prepare (fs, 1, 2048);
         return run (chain, { v }, bs, nullptr, seed)[0];
     };
@@ -325,7 +335,7 @@ TEST ("sample rates: +7 st correct at 44.1 / 48 / 88.2 / 96 kHz")
         vs::YinPitchDetector yin (fs);
         const float inF0 = yin.medianF0 (tone.data(), (int) tone.size());
         vs::VocalChain chain;
-        chain.setParams (pitchParams (7.0f, 0.0f), false);
+        chain.setEngineSettings (pitchParams (7.0f, 0.0f), false);
         chain.prepare (fs, 2, 1024);
         auto out = run (chain, { tone, tone }, 1024);
         auto mid = segment (out[1], chain.latencySamples() + (int) (fs * 0.5), (int) fs);
@@ -348,8 +358,8 @@ TEST ("formants: preservation keeps spectral centroid, follow mode moves it")
     auto centroidFor = [&] (float st, float pres, float formantShift) {
         vs::VocalChain chain;
         auto p = pitchParams (st, pres);
-        p.formantShift = formantShift;
-        chain.setParams (p, false);
+        p.formantShiftSemitones = formantShift;
+        chain.setEngineSettings (p, false);
         chain.prepare (fs, 1, 512);
         auto out = run (chain, { v }, 512);
         auto mid = segment (out[0], chain.latencySamples() + (int) fs, 8192);
@@ -373,9 +383,9 @@ TEST ("mix: mix=0 is the latency-aligned dry signal; gain is exact")
     auto x = harmonicTone (fs, 300, 1.0);
     vs::VocalChain chain;
     auto p = pitchParams (12.0f);
-    p.mixPercent = 0.0f;
+    p.mix01 = 0.0f;
     p.outputGainDb = -6.0f;
-    chain.setParams (p, false);
+    chain.setEngineSettings (p, false);
     chain.prepare (fs, 1, 300);
     auto out = run (chain, { x }, 300);
     const int lat = chain.latencySamples();
@@ -395,11 +405,11 @@ TEST ("bypass: click-free crossfade and exact pass-through once settled")
     for (size_t i = 0; i < x.size(); ++i)
         x[i] = 0.3f * (float) std::sin (2 * kPi * 220.0 * (double) i / fs);
     vs::VocalChain chain;
-    chain.setParams (pitchParams (7.0f), false);
+    chain.setEngineSettings (pitchParams (7.0f), false);
     chain.prepare (fs, 1, 256);
     const int toggleAt = (int) fs; // toggle to bypass at 1 s
     auto out = run (chain, { x }, 256, [&] (int pos) {
-        chain.setParams (pitchParams (7.0f), pos >= toggleAt);
+        chain.setEngineSettings (pitchParams (7.0f), pos >= toggleAt);
     });
     const int lat = chain.latencySamples();
     auto maxStep = [&] (const Signal& s, int a, int b) {
@@ -432,7 +442,7 @@ TEST ("automation: rapid semitone jumps stay bounded and finite")
         if (pos % 480 == 0) target = (float) ((int) (rng() % 49) - 24); // new value every 10 ms
         auto p = pitchParams (target);
         p.safetyClip = false;
-        chain.setParams (p, false);
+        chain.setEngineSettings (p, false);
     });
     const float inPeak = vs::peakAbs (v.data(), (int) v.size());
     const float peak = vs::peakAbs (out[0].data(), (int) out[0].size());
@@ -483,12 +493,23 @@ TEST ("performance: real-time factor (stereo, 48 kHz, 512-sample blocks)")
     const double fs = 48000;
     const int seconds = 10;
     auto v = vowel (fs, 200, seconds);
+    {
+        vs::VocalChain chain;
+        chain.setParams (vs::VoiceParams {}, false); // reference macros incl. Magia + auto level
+        chain.prepare (fs, 2, 512);
+        std::vector<Signal> in { v, v };
+        const auto t0 = std::chrono::steady_clock::now();
+        auto out = run (chain, in, 512);
+        const double secs = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
+        MEASURE ("full chain, reference macros (+7, 65 %%, 70 %%): %.1f%% of one core", 100.0 * secs / seconds);
+        CHECK (secs < seconds * 0.5);
+    }
     for (auto [st, form] : { std::pair<float, float> { 0, 0 }, { 7, 0 }, { -12, 2 } })
     {
         vs::VocalChain chain;
         auto p = pitchParams (st);
-        p.formantShift = form;
-        chain.setParams (p, false);
+        p.formantShiftSemitones = form;
+        chain.setEngineSettings (p, false);
         chain.prepare (fs, 2, 512);
         std::vector<Signal> in { v, v };
         const auto t0 = std::chrono::steady_clock::now();
@@ -498,6 +519,194 @@ TEST ("performance: real-time factor (stereo, 48 kHz, 512-sample blocks)")
                  st, form, secs, seconds, 100.0 * secs / seconds);
         CHECK (secs < seconds * 0.5); // generous: must be far faster than real time
     }
+}
+
+// ---------------------------------------------------------------------------
+// Macros (Pitch / Carácter / Magia) and the two voice modes
+// ---------------------------------------------------------------------------
+TEST ("macros: reference defaults and mapping rules")
+{
+    const vs::VoiceParams def;
+    CHECK (def.semitones == 7.0f && def.character == 65.0f && def.magic == 70.0f);
+    CHECK (def.mode == vs::VoiceMode::keepIdentity);
+
+    const auto e = vs::mapMacros (def);
+    MEASURE ("reference (identity): semis %.2f, formants follow %.1f %%, extra formant %+.2f st, brightness %+.2f dB, magic %.2f",
+             e.semitones, (1 - e.formantPreservation) * 100, e.formantShiftSemitones, e.brightnessDb, e.magic01);
+    auto rad = def;
+    rad.mode = vs::VoiceMode::radical;
+    const auto r = vs::mapMacros (rad);
+    MEASURE ("reference (radical):  semis %.2f, formants follow %.1f %%, extra formant %+.2f st, brightness %+.2f dB",
+             r.semitones, (1 - r.formantPreservation) * 100, r.formantShiftSemitones, r.brightnessDb);
+
+    // Character 0 = timbre untouched in both modes.
+    for (auto m : { vs::VoiceMode::keepIdentity, vs::VoiceMode::radical })
+    {
+        auto p = def;
+        p.mode = m;
+        p.character = 0;
+        const auto z = vs::mapMacros (p);
+        CHECK (z.formantPreservation == 1.0f && z.formantShiftSemitones == 0.0f && z.brightnessDb == 0.0f);
+    }
+    // Radical changes the timbre more than identity, for the same Character.
+    CHECK (r.formantPreservation < e.formantPreservation);
+    CHECK (r.formantShiftSemitones > e.formantShiftSemitones);
+    CHECK (r.brightnessDb > e.brightnessDb);
+    // Identity mode keeps formants mostly in place.
+    CHECK (e.formantPreservation >= 0.75f);
+    // Monotonic in Character; direction follows the pitch sign.
+    float prev = -100;
+    for (int c = 0; c <= 100; c += 10)
+    {
+        auto p = rad;
+        p.character = (float) c;
+        const float shift = vs::mapMacros (p).formantShiftSemitones;
+        CHECK (shift >= prev);
+        prev = shift;
+    }
+    auto down = rad;
+    down.semitones = -7;
+    CHECK (vs::mapMacros (down).formantShiftSemitones < 0 && vs::mapMacros (down).brightnessDb < 0);
+    // Continuity through 0 st (no timbre jump when automating pitch across 0).
+    float last = 0;
+    bool first = true;
+    float maxJump = 0;
+    for (int i = -200; i <= 200; ++i)
+    {
+        auto p = rad;
+        p.semitones = 0;
+        p.fineCents = (float) i * 0.5f;
+        const float v = vs::mapMacros (p).formantShiftSemitones;
+        if (! first) maxJump = std::max (maxJump, std::abs (v - last));
+        last = v;
+        first = false;
+    }
+    MEASURE ("max formant step for 0.5-cent pitch steps across 0 st: %.3f st", maxJump);
+    CHECK (maxJump < 0.1f);
+}
+
+TEST ("macros: reference settings shift F0 by +7 st in both modes; radical moves timbre further")
+{
+    const double fs = 48000;
+    const auto v = vowel (fs, 200, 3.0, 0.3f, 0.0, 0.0);
+    vs::YinPitchDetector yin (fs);
+    const float inF0 = yin.medianF0 (v.data(), (int) v.size());
+    auto inMid = segment (v, (int) fs, 8192);
+    const float cIn = vs::spectralCentroidHz (inMid.data(), (int) inMid.size(), fs);
+    float centroid[2] = {};
+    for (int m = 0; m < 2; ++m)
+    {
+        vs::VoiceParams p; // reference: +7, 65 %, 70 %
+        p.mode = m ? vs::VoiceMode::radical : vs::VoiceMode::keepIdentity;
+        vs::VocalChain chain;
+        chain.setParams (p, false);
+        chain.prepare (fs, 1, 512);
+        auto out = run (chain, { v }, 512)[0];
+        auto mid = segment (out, chain.latencySamples() + (int) fs, (int) fs);
+        const float f0 = yin.medianF0 (mid.data(), (int) mid.size());
+        const double err = centsBetween (inF0 * std::pow (2.0, 7.0 / 12.0), f0);
+        auto cm = segment (out, chain.latencySamples() + (int) fs, 8192);
+        centroid[m] = vs::spectralCentroidHz (cm.data(), (int) cm.size(), fs);
+        MEASURE ("%s: F0 error %+.2f cents, centroid %.0f Hz (input %.0f Hz), finite=%d",
+                 m ? "radical " : "identity", err, centroid[m], cIn, (int) allFinite (out));
+        CHECK (std::abs (err) < 15.0);
+        CHECK (allFinite (out));
+    }
+    CHECK (centroid[1] > centroid[0]);
+}
+
+TEST ("magia: 0 % is an exact bypass; 70 % compresses dynamics and adds air")
+{
+    const double fs = 48000;
+    // Vowel alternating loud (-6 dBFS) and quiet (-26 dBFS) every 0.5 s.
+    auto v = vowel (fs, 180, 4.0, 0.5f, 5.0, 20.0);
+    for (size_t i = 0; i < v.size(); ++i)
+        if ((i / (size_t) (fs / 2)) % 2 == 1)
+            v[i] *= 0.1f;
+    auto segRmsRatioDb = [&] (const Signal& x) {
+        // loud segment 2 (1.0..1.5 s) vs quiet segment 3 (1.5..2.0 s), skipping 100 ms edges
+        const int a = (int) (fs * 1.1), b = (int) (fs * 1.6), len = (int) (fs * 0.3);
+        return 20.0f * std::log10 (vs::rms (x.data() + a, len) / vs::rms (x.data() + b, len));
+    };
+
+    for (float magic : { 0.0f, 0.7f, 1.0f })
+    {
+        vs::VocalEnhancer enh;
+        enh.setMagic (magic);
+        enh.prepare (fs, 1);
+        Signal out = v;
+        float* ptr = out.data();
+        for (size_t pos = 0; pos < out.size(); pos += 512)
+        {
+            float* p = ptr + pos;
+            enh.process (&p, 1, (int) std::min<size_t> (512, out.size() - pos));
+        }
+        auto mid = segment (out, (int) (fs * 1.1), 8192);
+        auto midIn = segment (v, (int) (fs * 1.1), 8192);
+        const float cOut = vs::spectralCentroidHz (mid.data(), (int) mid.size(), fs);
+        const float cIn = vs::spectralCentroidHz (midIn.data(), (int) midIn.size(), fs);
+        MEASURE ("magic %.0f %%: loud/quiet ratio in %.1f dB -> out %.1f dB; centroid %.0f -> %.0f Hz; finite=%d",
+                 magic * 100, segRmsRatioDb (v), segRmsRatioDb (out), cIn, cOut, (int) allFinite (out));
+        CHECK (allFinite (out));
+        if (magic == 0.0f)
+            CHECK (out == v); // bit-exact bypass
+        else
+        {
+            CHECK (segRmsRatioDb (out) < segRmsRatioDb (v) - 3.0f); // at least 3 dB less dynamic range
+            CHECK (cOut > cIn);                                    // more high-frequency energy
+            CHECK (vs::peakAbs (out.data(), (int) out.size()) < 2.0f);
+        }
+    }
+}
+
+TEST ("nivel automatico: compensates level loss at +12 st and never boosts silence")
+{
+    const double fs = 48000;
+    Signal x ((size_t) (fs * 6), 0.0f);
+    const auto v = vowel (fs, 180, 3.0, 0.3f);
+    std::copy (v.begin(), v.end(), x.begin()); // 3 s voice, 3 s digital silence
+    const float inRms = vs::rms (x.data() + (int) fs, (int) fs);
+    for (bool autoLevel : { false, true })
+    {
+        auto e = pitchParams (12.0f, 100.0f);
+        e.autoLevel = autoLevel;
+        vs::VocalChain chain;
+        chain.setEngineSettings (e, false);
+        chain.prepare (fs, 1, 512);
+        auto out = run (chain, { x }, 512)[0];
+        const int lat = chain.latencySamples();
+        const float outRms = vs::rms (out.data() + lat + (int) (fs * 1.5), (int) fs);
+        auto tail = segment (out, lat + (int) (fs * 4.5), (int) fs);
+        const float tailPeak = vs::peakAbs (tail.data(), (int) tail.size());
+        MEASURE ("autoLevel=%d: output level vs input %+.2f dB, gain %.1f dB, peak in silence %g",
+                 (int) autoLevel, 20 * std::log10 (outRms / inRms), chain.autoLevelGainDb(), tailPeak);
+        if (autoLevel)
+            CHECK (std::abs (20 * std::log10 (outRms / inRms)) < 1.5f);
+        CHECK (tailPeak < 1.0e-5f);
+    }
+}
+
+TEST ("macros: switching mode and moving macros during playback stays finite and bounded")
+{
+    const double fs = 48000;
+    auto v = vowel (fs, 210, 4.0);
+    vs::VocalChain chain;
+    chain.prepare (fs, 2, 256);
+    std::mt19937 rng (11);
+    auto out = run (chain, { v, v }, 256, [&] (int pos) {
+        vs::VoiceParams p;
+        p.mode = ((pos / 9600) % 2) ? vs::VoiceMode::radical : vs::VoiceMode::keepIdentity;
+        p.semitones = (float) ((int) (rng() % 49) - 24);
+        p.character = (float) (rng() % 101);
+        p.magic = (float) (rng() % 101);
+        p.safetyClip = false;
+        chain.setParams (p, false);
+    });
+    const float peak = std::max (vs::peakAbs (out[0].data(), (int) v.size()), vs::peakAbs (out[1].data(), (int) v.size()));
+    MEASURE ("random macros every 256 samples, mode toggled every 200 ms: peak %.3f (input peak %.3f)",
+             peak, vs::peakAbs (v.data(), (int) v.size()));
+    CHECK (allFinite (out[0]) && allFinite (out[1]));
+    CHECK (peak < 4.0f);
 }
 
 int main (int argc, char** argv)
