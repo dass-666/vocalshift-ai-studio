@@ -329,6 +329,55 @@ TEST ("state: v1 project state (engineMode property, formantPreserve) migrates t
     CHECK (std::abs (getParam (p, vs::params::character) - 65.0f) < 1e-4f);
 }
 
+TEST ("state: v4 project (no engine parameter) migrates to the Phase 4 pitch engine; engine param round-trips")
+{
+    juce::ValueTree v4 ("VocalShiftState");
+    v4.setProperty ("stateVersion", 4, nullptr);
+    juce::ValueTree c ("PARAM");
+    c.setProperty ("id", "semitones", nullptr);
+    c.setProperty ("value", 5.0f, nullptr);
+    v4.appendChild (c, nullptr);
+    juce::MemoryBlock mb;
+    juce::AudioProcessor::copyXmlToBinary (*v4.createXml(), mb);
+    VocalShiftProcessor p;
+    p.setStateInformation (mb.getData(), (int) mb.getSize());
+    CHECK (getParam (p, vs::params::engine) == 0.0f);
+    CHECK (getParam (p, vs::params::semitones) == 5.0f);
+    CHECK ((int) p.getState().state.getProperty (vs::params::propStateVersion) == 5);
+
+    // Round trip of engine = 1 through the saved state.
+    if (auto* prm = p.getState().getParameter (vs::params::engine))
+        prm->setValueNotifyingHost (prm->convertTo0to1 (1.0f));
+    juce::MemoryBlock saved;
+    p.getStateInformation (saved);
+    VocalShiftProcessor q;
+    q.setStateInformation (saved.getData(), (int) saved.getSize());
+    CHECK (getParam (q, vs::params::engine) == 1.0f);
+}
+
+TEST ("presets: Fase 5 presets exist, are distinct, and only the [EXPERIMENTAL] one selects the PSOLA engine")
+{
+    int experimental = 0;
+    std::vector<std::string> sigs;
+    for (const auto* id : { "second_voice_natural", "melodic_rap", "pop_bright", "dark_vocal", "rock_texture", "dream_atmosphere", "high_creative", "exp_psola_second_voice" })
+    {
+        const auto* fp = vs::findFactoryPreset (id);
+        CHECK_MSG (fp != nullptr, "missing preset %s", id);
+        if (fp == nullptr) continue;
+        if (fp->params.engine == 1) { ++experimental; CHECK (fp->name.find ("EXPERIMENTAL") != std::string::npos); }
+        const auto e = vs::mapMacros (fp->params);
+        sigs.push_back (std::to_string (e.semitones) + "/" + std::to_string (e.spaceReverb) + "/" + std::to_string (e.brightnessDb) + "/" + std::to_string (e.secondGainDb) + "/" + std::to_string (e.textureAmount));
+    }
+    CHECK (experimental == 1);
+    std::sort (sigs.begin(), sigs.end());
+    CHECK (std::adjacent_find (sigs.begin(), sigs.end()) == sigs.end());
+    VocalShiftProcessor p;
+    CHECK (p.getPresetManager().applyFactoryPreset ("exp_psola_second_voice"));
+    CHECK (getParam (p, vs::params::engine) == 1.0f);
+    CHECK (p.getPresetManager().applyFactoryPreset ("urban_spatial"));
+    CHECK (getParam (p, vs::params::engine) == 0.0f);
+}
+
 TEST ("macros: changing Pitch/Character/Magic/mode on the processor changes the output")
 {
     const auto v = vowel (48000, 190, 2.0);

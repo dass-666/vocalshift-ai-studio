@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(VocalShiftAIStudio VERSION 0.4.0 LANGUAGES C CXX)
+project(VocalShiftAIStudio VERSION 0.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,6 +27,7 @@ include(cmake/Dependencies.cmake)
 add_library(vs_core STATIC
     src/core/VocalChain.cpp
     src/core/dsp/SignalsmithPitchShifter.cpp
+    src/core/dsp/PsolaPitchShifter.cpp
     src/core/mix/VocalMixEngine.cpp
     src/core/morph/ToneShaper.cpp
     src/core/analysis/PitchDetector.cpp

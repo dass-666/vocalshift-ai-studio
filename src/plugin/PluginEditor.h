@@ -134,8 +134,8 @@ private:
 
     // Pro page
     Knob proFine, proFormant, proBrightness, proMix, proGain, proPan, proOffset, proWidth, proReverb, proDelay;
-    juce::ToggleButton safetyButton, autoLevelButton, improvedButton, spatialButton;
-    std::unique_ptr<ButtonAttachment> safetyAttachment, autoLevelAttachment, improvedAttachment, spatialAttachment;
+    juce::ToggleButton safetyButton, autoLevelButton, improvedButton, spatialButton, engineButton;
+    std::unique_ptr<ButtonAttachment> safetyAttachment, autoLevelAttachment, improvedAttachment, spatialAttachment, engineAttachment;
     juce::Label engineInfo;
     juce::Rectangle<int> proPanels[6], faderStrip;
     const char* proPanelTitles[6] = { "PITCH", "TIMBRE", "DINÁMICA", "ESPACIO", "MEZCLA", "CALIDAD Y DIAGNÓSTICO" };

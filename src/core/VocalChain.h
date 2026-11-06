@@ -6,6 +6,7 @@
 #include "enhance/VocalEnhancer.h"
 #include "mix/LevelMatcher.h"
 #include "dsp/PitchShifter.h"
+#include "dsp/PsolaPitchShifter.h"
 #include "mix/VocalMixEngine.h"
 #include "morph/ToneShaper.h"
 #include "morph/VoiceTexture.h"
@@ -41,7 +42,10 @@ public:
     void process (float* const* io, int numChannels, int numSamples);
 
     int latencySamples() const { return latency; }
-    const char* engineName() const { return shifter->engineName(); }
+    const char* engineName() const { return (activeEngine == 1 && alt ? static_cast<const IPitchShifter&> (*alt) : *shifter).engineName(); }
+    // Pitch engine actually in use (0 = Phase 4 reference, 1 = experimental PSOLA); lags the request by ~0.3 s while it switches.
+    int activeEngineIndex() const { return activeEngine; }
+    bool engineSwitching() const { return switchPhase != 0; }
 
     // Peak levels of the last processed block (linear), for metering.
     float lastInputPeak() const { return inPeak; }
@@ -65,7 +69,13 @@ public:
 private:
     void processChunk (float* const* io, int numChannels, int offset, int n);
 
-    std::unique_ptr<IPitchShifter> shifter;
+    std::unique_ptr<IPitchShifter> shifter;      // Phase 4 reference engine (engine 0)
+    std::unique_ptr<PsolaPitchShifter> alt;      // experimental engine (engine 1), latency padded to the reference
+    int activeEngine = 0, targetEngine = 0, requestedEngine = 0;
+    int switchPhase = 0;                         // 0 idle, 1 priming the new engine, 2 crossfading
+    int switchCount = 0, xfadeLength = 1, primeLength = 1;
+    std::vector<std::vector<float>> altScratch;
+    PitchSettings lastPitch;
     ConsonantBlend consonants;
     DeEsser deEsser;
     VoiceTexture texture;

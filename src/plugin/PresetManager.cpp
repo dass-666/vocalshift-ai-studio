@@ -75,6 +75,8 @@ Result PresetManager::fromPresetTree (const ValueTree& t)
         setParam (params::spaceReverb, 100.0f);
         setParam (params::spaceDelay, 100.0f);
     }
+    if (version < 5)
+        setParam (params::engine, 0.0f); // presets from before Phase 5 use the Phase 4 engine
     for (auto child : t)
     {
         const String id = child.getProperty ("id");

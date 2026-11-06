@@ -155,6 +155,21 @@ ValueTree VocalShiftProcessor::migrateState (ValueTree state)
             state.appendChild (p, nullptr);
         }
     }
+    if (version < 5)
+    {
+        // v4 -> v5: older projects keep the Phase 4 pitch engine.
+        bool found = false;
+        for (auto child : state)
+            if (child.hasType ("PARAM") && child.getProperty ("id").toString() == params::engine)
+                found = true;
+        if (! found)
+        {
+            ValueTree p ("PARAM");
+            p.setProperty ("id", params::engine, nullptr);
+            p.setProperty ("value", 0.0f, nullptr);
+            state.appendChild (p, nullptr);
+        }
+    }
     state.setProperty (params::propStateVersion, params::currentStateVersion, nullptr);
     return state;
 }

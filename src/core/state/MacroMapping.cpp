@@ -11,6 +11,7 @@ EngineSettings mapMacros (const VoiceParams& p)
     using K = MacroMappingConstants;
     EngineSettings e;
     e.semitones = p.totalSemitones();
+    e.pitchEngine = std::clamp (p.engine, 0, 1);
 
     const float c = std::clamp (p.character, 0.0f, 100.0f) / 100.0f;
     // Timbre moves in the same direction as the pitch (up = smaller/brighter, down = bigger/darker).
