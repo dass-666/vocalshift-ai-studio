@@ -9,6 +9,7 @@
 #include <core/dsp/SignalsmithPitchShifter.h>
 #include <core/mix/VocalMixEngine.h>
 #include <core/mix/LevelMatcher.h>
+#include <core/dsp/DeEsser.h>
 #include <core/enhance/VocalEnhancer.h>
 #include <core/state/MacroMapping.h>
 #include <core/state/FactoryPresets.h>
@@ -1219,6 +1220,84 @@ TEST ("consonants: fricative noise keeps its original spectral position after +7
     MEASURE ("spectral centroid: original %.0f Hz, legacy +7 st %.0f Hz, improved +7 st %.0f Hz", cIn, cLegacy, cNew);
     CHECK (cLegacy > cIn * 1.05);                          // the old engine does shift the noise upwards
     CHECK (std::abs (cNew - cIn) < std::abs (cLegacy - cIn)); // the improved path is closer to the original
+}
+
+
+TEST ("de-esser: attenuates sibilance, leaves vowels alone, Magia 0 % is an exact bypass")
+{
+    const double fs = 48000;
+    auto sib = whiteNoise ((int) (fs * 1.0), 0.15f, 21);
+    for (size_t i = sib.size() - 1; i > 1; --i) sib[i] = sib[i] - 1.6f * sib[i - 1] + 0.8f * sib[i - 2]; // bright noise
+    const auto vow = vowel (fs, 200, 1.0, 0.3f);
+    auto runDe = [&] (const Signal& x, float amount, float* maxGr = nullptr) {
+        vs::DeEsser d;
+        d.prepare (fs, 1);
+        d.setAmount (amount);
+        d.prepare (fs, 1); // snap the amount smoother
+        Signal y = x;
+        float gr = 0;
+        for (size_t pos = 0; pos < y.size(); pos += 256)
+        {
+            float* p = y.data() + pos;
+            d.process (&p, 1, (int) std::min<size_t> (256, y.size() - pos));
+            gr = std::max (gr, d.lastReductionDb());
+        }
+        if (maxGr) *maxGr = gr;
+        return y;
+    };
+    float grSib = 0, grVow = 0;
+    const auto s0 = runDe (sib, 0.0f), s70 = runDe (sib, 0.7f, &grSib), v70 = runDe (vow, 0.7f, &grVow);
+    CHECK (s0 == sib); // exact bypass at 0 %
+    const double sibDelta = rmsDb (s70, 24000, 20000) - rmsDb (sib, 24000, 20000);
+    const double vowDelta = rmsDb (v70, 24000, 20000) - rmsDb (vow, 24000, 20000);
+    MEASURE ("sibilant noise: %.1f dB (max reduction %.1f dB); vowel: %.2f dB (max reduction %.2f dB)", sibDelta, grSib, vowDelta, grVow);
+    CHECK (sibDelta < -3.0);
+    CHECK (std::abs (vowDelta) < 0.3);
+}
+
+TEST ("diagnosis: pitch engine measurements at +3 / +7 / +12 / +19 and -5 / -12 st (vowel with vibrato)")
+{
+    // Reproducible measurements of the real engine, used to decide what is worth changing.
+    // Nothing here is a perceptual claim.
+    const double fs = 48000;
+    const auto x = vowel (fs, 200.0, 3.0, 0.3f, 5.0, 30.0);
+    vs::YinPitchDetector yin (fs);
+    auto track = [&] (const Signal& s, int from) {
+        std::vector<double> cents;
+        const int win = 4096, hop = 1200;
+        for (int i = from; i + win < (int) s.size(); i += hop)
+        {
+            const auto est = yin.analyse (s.data() + i, win);
+            if (est.frequencyHz > 0 && est.aperiodicity < 0.3f) cents.push_back (1200.0 * std::log2 (est.frequencyHz / 200.0));
+        }
+        return cents;
+    };
+    auto spread = [] (const std::vector<double>& c) {
+        if (c.size() < 2) return 0.0;
+        double m = 0; for (double v : c) m += v; m /= (double) c.size();
+        double s = 0; for (double v : c) s += (v - m) * (v - m);
+        return std::sqrt (s / (double) c.size());
+    };
+    const double inSpread = spread (track (x, 14400));
+    for (float st : { 3.0f, 7.0f, 12.0f, 19.0f, -5.0f, -12.0f })
+    {
+        vs::VoiceParams p;
+        p.semitones = st; p.character = 0; p.magic = 0; p.autoLevel = false; p.improved = true;
+        vs::VocalChain chain;
+        chain.setParams (p, false);
+        chain.prepare (fs, 1, 512);
+        auto o = run (chain, { x }, 512)[0];
+        const int L = chain.latencySamples();
+        const auto tr = track (o, 14400 + L);
+        double mean = 0; for (double c : tr) mean += c; mean /= std::max<size_t> (1, tr.size());
+        const double sp = spread (tr);
+        // level and bandwidth
+        const double lvl = rmsDb (o, 14400 + L, 48000) - rmsDb (x, 14400, 48000);
+        MEASURE ("%+5.0f st: mean F0 error %+6.1f cents, vibrato spread %5.1f cents (input %.1f => retained %.0f %%), level change %+5.2f dB, %zu voiced frames",
+                 st, mean - st * 100.0, sp, inSpread, 100.0 * sp / std::max (1e-9, inSpread), lvl, tr.size());
+        CHECK (tr.size() > 10);
+        CHECK (std::abs (mean - st * 100.0) < 40.0);
+    }
 }
 
 

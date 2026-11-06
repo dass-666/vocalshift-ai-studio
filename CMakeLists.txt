@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(VocalShiftAIStudio VERSION 0.1.0 LANGUAGES C CXX)
+project(VocalShiftAIStudio VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -35,6 +35,7 @@ add_library(vs_core STATIC
     src/core/enhance/VocalEnhancer.cpp
     src/core/mix/LevelMatcher.cpp
     src/core/dsp/ConsonantBlend.cpp
+    src/core/dsp/DeEsser.cpp
 )
 target_include_directories(vs_core PUBLIC src)
 target_link_libraries(vs_core PUBLIC signalsmith-stretch)

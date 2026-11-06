@@ -124,7 +124,7 @@ int main (int argc, char** argv)
         {
             p.getState().state.setProperty (vs::params::propUiMode, mode, nullptr);
             std::unique_ptr<AudioProcessorEditor> ed (p.createEditor());
-            ed->setSize (900, 560);
+            ed->setSize (900, 680);
             auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 2.0f);
             File f = outDir.getChildFile (String ("ui_") + mode + ".png");
             f.deleteFile();
@@ -183,7 +183,7 @@ int main (int argc, char** argv)
         };
         // Pure pitch engine: Character 0 (formants fully preserved), Magia 0, auto level off.
         // The 'Ajuste RMS' column therefore shows the engine's own level change.
-        for (int st : { -24, -12, -7, -3, 3, 7, 12, 24 })
+        for (int st : { -24, -12, -7, -3, 3, 7, 12, 19, 24 })
             cases.push_back ({ String ("pitch_") + (st > 0 ? "+" : "") + String (st) + "st_preserve100",
                                [st, setP] (vs::VocalShiftProcessor& p) {
                                    setP (p, vs::params::semitones, (float) st);
@@ -192,10 +192,35 @@ int main (int argc, char** argv)
                                    setP (p, vs::params::autoLevel, 0);
                                }, (float) st });
         // Experiment 01 (reference macros): isolate the effect of mode, Character and Magia.
-        cases.push_back ({ "exp01_A_ref_identidad_+7_65_70", [] (vs::VocalShiftProcessor&) {}, 7.0f });
-        cases.push_back ({ "exp01_B_ref_radical_+7_65_70", [setP] (vs::VocalShiftProcessor& p) { setP (p, vs::params::mode, 1); }, 7.0f });
-        cases.push_back ({ "exp01_C_identidad_+7_65_magia0", [setP] (vs::VocalShiftProcessor& p) { setP (p, vs::params::magic, 0); }, 7.0f });
-        cases.push_back ({ "exp01_D_identidad_+7_caracter0_70", [setP] (vs::VocalShiftProcessor& p) { setP (p, vs::params::character, 0); }, 7.0f });
+        // (run with improved = off: exactly the sound of experiment 01 / commit dec340d)
+        cases.push_back ({ "exp01_A_ref_identidad_+7_65_70", [setP] (vs::VocalShiftProcessor& p) { setP (p, vs::params::improved, 0); }, 7.0f });
+        cases.push_back ({ "exp01_B_ref_radical_+7_65_70", [setP] (vs::VocalShiftProcessor& p) { setP (p, vs::params::improved, 0); setP (p, vs::params::mode, 1); }, 7.0f });
+        cases.push_back ({ "exp01_C_identidad_+7_65_magia0", [setP] (vs::VocalShiftProcessor& p) { setP (p, vs::params::improved, 0); setP (p, vs::params::magic, 0); }, 7.0f });
+        cases.push_back ({ "exp01_D_identidad_+7_caracter0_70", [setP] (vs::VocalShiftProcessor& p) { setP (p, vs::params::improved, 0); setP (p, vs::params::character, 0); }, 7.0f });
+
+        // Experiment 02 (same take, equal RMS): see docs/EXPERIMENT_02_SEGUNDA_VOZ.md. A is the original file.
+        // F0 error is only meaningful for single-voice cases; second-voice files hold two voices (expectSt = 999).
+        auto second = [setP] (vs::VocalShiftProcessor& p, float st, float character, float magic) {
+            setP (p, vs::params::route, 1);
+            setP (p, vs::params::semitones, st);
+            setP (p, vs::params::character, character);
+            setP (p, vs::params::magic, magic);
+        };
+        cases.push_back ({ "exp02_B_transformar_+7_actual", [setP] (vs::VocalShiftProcessor& p) { setP (p, vs::params::improved, 0); }, 7.0f });
+        cases.push_back ({ "exp02_C_transformar_+7_mejorado", [] (vs::VocalShiftProcessor&) {}, 7.0f });
+        cases.push_back ({ "exp02_D_segunda_voz_+7_-9dB", [second] (vs::VocalShiftProcessor& p) { second (p, 7, 65, 70); }, 999.0f });
+        cases.push_back ({ "exp02_E_segunda_voz_+12_-9dB", [second] (vs::VocalShiftProcessor& p) { second (p, 12, 65, 70); }, 999.0f });
+        cases.push_back ({ "exp02_F_segunda_voz_+7_caracter0", [second] (vs::VocalShiftProcessor& p) { second (p, 7, 0, 70); }, 999.0f });
+        cases.push_back ({ "exp02_G_segunda_voz_+7_caracter65", [second] (vs::VocalShiftProcessor& p) { second (p, 7, 65, 70); }, 999.0f });
+        cases.push_back ({ "exp02_H_segunda_voz_+7_magia0", [second] (vs::VocalShiftProcessor& p) { second (p, 7, 65, 0); }, 999.0f });
+        cases.push_back ({ "exp02_I_segunda_voz_+7_magia70", [second] (vs::VocalShiftProcessor& p) { second (p, 7, 65, 70); }, 999.0f });
+        // Comparison across intervals (improved path) for the engine-naturalness question.
+        for (int st : { 3, 7, 12, 19, -5, -12 })
+            cases.push_back ({ String ("exp02_intervalo_") + (st > 0 ? "+" : "") + String (st) + "st_mejorado",
+                               [st, setP] (vs::VocalShiftProcessor& p) { setP (p, vs::params::semitones, (float) st); }, (float) st });
+        for (int st : { 3, 7, 12, 19, -5, -12 })
+            cases.push_back ({ String ("exp02_intervalo_") + (st > 0 ? "+" : "") + String (st) + "st_actual",
+                               [st, setP] (vs::VocalShiftProcessor& p) { setP (p, vs::params::improved, 0); setP (p, vs::params::semitones, (float) st); }, (float) st });
         for (const auto& fp : vs::factoryPresets())
             if (fp.id != "neutral" && fp.id != "reference")
                 cases.push_back ({ String ("preset_") + fp.id,
@@ -212,10 +237,11 @@ int main (int argc, char** argv)
             out.applyGain (match);
             const float outF0 = medianF0 (out, src.rate);
             const double expected = inF0 * std::pow (2.0, c.expectSt / 12.0);
-            const double err = outF0 > 0 && inF0 > 0 ? vstest::centsBetween (expected, outF0) : 0.0;
+            const bool single = c.expectSt < 900.0f;
+            const double err = single && outF0 > 0 && inF0 > 0 ? vstest::centsBetween (expected, outF0) : 0.0;
             writeWav (outDir.getChildFile (src.name + "__" + c.label + ".wav"), out, src.rate);
-            report << "| " << src.name << " | " << c.label << " | " << String (inF0, 1) << " | " << String (outF0, 1)
-                   << " | " << String (err, 1) << " | " << String (Decibels::gainToDecibels (match), 1)
+            report << "| " << src.name << " | " << c.label << " | " << String (inF0, 1) << " | " << (single ? String (outF0, 1) : String ("n/a (2 voces)"))
+                   << " | " << (single ? String (err, 1) : String ("n/a")) << " | " << String (Decibels::gainToDecibels (match), 1)
                    << " | " << String (100.0 * cpu / seconds, 1) << " | " << latency << " (" << String (1000.0 * latency / src.rate, 1) << " ms) |\n";
         }
     }

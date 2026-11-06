@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dsp/ConsonantBlend.h"
+#include "dsp/DeEsser.h"
 #include "dsp/LinearSmoother.h"
 #include "enhance/VocalEnhancer.h"
 #include "mix/LevelMatcher.h"
@@ -50,6 +51,7 @@ public:
     // Output samples the last-resort soft clip has altered (should stay 0 at sane levels).
     long clipAlteredSamples() const { return mixer.clipAlteredSamples(); }
     // Whether the robust level matcher currently considers the voice active (diagnostics).
+    float lastDeEssReductionDb() const { return deEsser.lastReductionDb(); }
     bool levelVoiceActive() const { return levelMatcher.voiceActive(); }
 
 private:
@@ -57,6 +59,7 @@ private:
 
     std::unique_ptr<IPitchShifter> shifter;
     ConsonantBlend consonants;
+    DeEsser deEsser;
     ToneShaper tone;
     VocalEnhancer enhancer;
     LevelMatcher levelMatcher;

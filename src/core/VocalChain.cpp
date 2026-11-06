@@ -21,6 +21,7 @@ void VocalChain::prepare (double sampleRate, int numChannels, int maxBlockSize)
     shifter->prepare (sampleRate, channels, maxBlock);
     latency = shifter->latencySamples();
     consonants.prepare (sampleRate, channels);
+    deEsser.prepare (sampleRate, channels);
     tone.prepare (sampleRate, channels);
     enhancer.prepare (sampleRate, channels);
     levelMatcher.prepare (sampleRate);
@@ -56,6 +57,7 @@ void VocalChain::reset()
 {
     shifter->reset();
     consonants.reset();
+    deEsser.reset();
     tone.reset();
     enhancer.reset();
     levelMatcher.reset();
@@ -73,6 +75,7 @@ void VocalChain::setEngineSettings (const EngineSettings& e, bool bypassed)
     levelMatcher.setEnabled (e.autoLevel);
     levelMatcher.setRobust (e.improved);
     consonants.setEnabled (e.improved);
+    deEsser.setAmount (e.improved ? std::clamp (e.magic01, 0.0f, 1.0f) : 0.0f);
     mixer.setRouting (e.secondVoice, std::clamp (e.mix01, 0.0f, 1.0f),
                       std::clamp (e.secondGainDb, -30.0f, 0.0f), std::clamp (e.pan, -1.0f, 1.0f),
                       std::clamp (e.offsetMs, 0.0f, VocalMixEngine::maxOffsetMs));
@@ -155,6 +158,7 @@ void VocalChain::processChunk (float* const* io, int nCh, int offset, int n)
 
     consonants.process (dryPtrs.data(), wetPtrs.data(), nCh, n);
     tone.process (wetPtrs.data(), nCh, n);
+    deEsser.process (wetPtrs.data(), nCh, n); // before the compressor/air so sibilance is not boosted
     enhancer.process (wetPtrs.data(), nCh, n);
     levelMatcher.process (dryPtrs.data(), wetPtrs.data(), nCh, n);
     levelGainDb.store (levelMatcher.currentGainDb(), std::memory_order_relaxed);
