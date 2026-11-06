@@ -48,6 +48,8 @@ private:
     void setupKnob (Knob&, const juce::String& title, const juce::String& hint, const char* paramId, bool big);
     void setUiMode (bool pro);
     void setVoiceMode (VoiceMode m);
+    void setRoute (VoiceRoute r);
+    VoiceRoute route() const;
     void refreshModeButtons();
     void rebuildPresetMenu();
     void syncPresetBox();
@@ -68,15 +70,17 @@ private:
 
     // Shared: voice mode selector (parameter "mode")
     juce::TextButton identityButton, radicalButton;
+    juce::TextButton transformButton, secondVoiceButton; // route selector (parameter "route")
     juce::Label modeDescription, status;
 
     // Easy page: the three macros + mix/gain
-    Knob easyPitch, easyCharacter, easyMagic, easyMix, easyGain;
+    Knob easyPitch, easyCharacter, easyMagic; // exactly the three macros (+ the route selector)
 
     // Pro page
     Knob proPitch, proFine, proCharacter, proMagic, proFormant, proBrightness, proMix, proGain;
-    juce::ToggleButton safetyButton, autoLevelButton;
-    std::unique_ptr<ButtonAttachment> safetyAttachment, autoLevelAttachment;
+    Knob proSecondGain, proPan, proOffset;
+    juce::ToggleButton safetyButton, autoLevelButton, improvedButton;
+    std::unique_ptr<ButtonAttachment> safetyAttachment, autoLevelAttachment, improvedAttachment;
     juce::Label engineInfo;
 
     juce::Label roadmap;
@@ -84,6 +88,8 @@ private:
 
     bool proMode = false;
     VoiceMode shownVoiceMode = VoiceMode::keepIdentity;
+    VoiceRoute shownRoute = VoiceRoute::transform;
+    bool shownImproved = true;
     juce::String shownPresetId;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Array<juce::File> userPresetFiles;

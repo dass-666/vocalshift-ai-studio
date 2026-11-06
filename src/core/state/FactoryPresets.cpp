@@ -11,10 +11,12 @@ float VoiceParams::totalSemitones() const
 }
 
 static VoiceParams make (VoiceMode mode, float st, float character, float magic,
-                         float formantOffset = 0.0f, float brightnessOffset = 0.0f)
+                         float formantOffset = 0.0f, float brightnessOffset = 0.0f,
+                         VoiceRoute route = VoiceRoute::transform)
 {
     VoiceParams p;
     p.mode = mode;
+    p.route = route;
     p.semitones = st;
     p.character = character;
     p.magic = magic;
@@ -31,6 +33,12 @@ const std::vector<FactoryPreset>& factoryPresets()
     static const std::vector<FactoryPreset> presets {
         { "reference", "Referencia (+7 · 65 % · 70 %)", "Valores de referencia del proyecto: +7 st, Carácter 65 %, Magia 70 %, conservando identidad.",
           make (M::keepIdentity, 7, 65, 70) },
+
+        { "second_voice_7", "Segunda voz +7 (referencia)", "Tu voz original al frente y una segunda voz +7 st, 9 dB por debajo, centrada.",
+          make (M::keepIdentity, 7, 65, 70, 0, 0, VoiceRoute::secondVoice) },
+
+        { "second_voice_12", "Segunda voz +12 (octava)", "Tu voz original al frente y una segunda voz una octava arriba, 9 dB por debajo.",
+          make (M::keepIdentity, 12, 65, 70, 0, 0, VoiceRoute::secondVoice) },
 
         { "neutral", "Neutro (sin cambio)", "Sin transposición, sin cambio de timbre y sin mejoras.",
           make (M::keepIdentity, 0, 0, 0) },

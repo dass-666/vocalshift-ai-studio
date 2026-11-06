@@ -40,6 +40,17 @@ installed plugins** (o *Find more plugins*). Busca "VocalShift AI Studio" en la 
 
 El protocolo detallado con puntuaciones está en `EXPERIMENT_01_VOZ_REAL.md`.
 
+## 5b. Pruebas de Segunda voz (v0.3, 10 minutos)
+
+1. Carga la pista de voz en el Mixer, inserta el plugin y elige el preset **"Segunda voz +7 (referencia)"** (o pulsa **Segunda voz**).
+2. Canta: debes oír tu voz igual que sin plugin y, detrás, una segunda voz más alta y más baja de volumen. Con el transporte parado y reiniciado debe seguir alineada.
+3. Pro: mueve Volumen 2.ª voz (−9 por defecto), Pan y Desfase artístico (0–100 ms). Cambiar el desfase no debe mover la latencia que FL compensa.
+4. Cambia entre Transformar y Segunda voz mientras suena: no debe haber clics.
+5. Abre un proyecto de la versión anterior: debe sonar como antes (el interruptor "DSP mejorado" queda apagado en esos proyectos). Compáralo con "DSP mejorado" encendido.
+6. Cambia el tamaño de búfer y la frecuencia de muestreo del proyecto y repite 2.
+
+**No se ha probado la v0.3 en FL Studio.** Hasta que lo hagas tú, solo está comprobada con pluginval y las pruebas automáticas.
+
 ## 6. Qué reportar
 Versión de FL Studio, tamaño de buffer (*Options → Audio settings*), frecuencia de muestreo, CPU que muestra FL,
 y cualquier: fallo al escanear, cuelgue, clic, desincronización con otras pistas, valores que no se restauran.

@@ -8,6 +8,8 @@
 #include <core/analysis/PitchDetector.h>
 #include <core/dsp/SignalsmithPitchShifter.h>
 #include <core/mix/VocalMixEngine.h>
+#include <core/mix/LevelMatcher.h>
+#include <core/dsp/DeEsser.h>
 #include <core/enhance/VocalEnhancer.h>
 #include <core/state/MacroMapping.h>
 #include <core/state/FactoryPresets.h>
@@ -483,7 +485,9 @@ TEST ("presets: every factory preset is reproducible and audibly different from 
         CHECK (a == b);
         if (preset.id != "neutral")
             CHECK_MSG (diffDb > -20.0, "%s too similar to neutral (%.1f dB)", preset.id.c_str(), diffDb);
-        if (preset.params.totalSemitones() != 0)
+        // Second-voice presets contain the untouched original as well; their pitch is checked in
+        // the dedicated second-voice tests (a monophonic detector is meaningless on a two-voice mix).
+        if (preset.params.totalSemitones() != 0 && preset.params.route == vs::VoiceRoute::transform)
             CHECK_MSG (std::abs (movedCents - preset.params.totalSemitones() * 100) < 20.0, "%s", preset.id.c_str());
     }
 }
@@ -526,9 +530,11 @@ TEST ("performance: real-time factor (stereo, 48 kHz, 512-sample blocks)")
 // ---------------------------------------------------------------------------
 TEST ("macros: reference defaults and mapping rules")
 {
-    const vs::VoiceParams def;
+    vs::VoiceParams def;
     CHECK (def.semitones == 7.0f && def.character == 65.0f && def.magic == 70.0f);
     CHECK (def.mode == vs::VoiceMode::keepIdentity);
+    CHECK (def.route == vs::VoiceRoute::transform && def.secondGainDb == -9.0f && def.pan == 0.0f && def.offsetMs == 0.0f);
+    def.improved = false; // this test documents the legacy (dec340d) mapping rules
 
     const auto e = vs::mapMacros (def);
     MEASURE ("reference (identity): semis %.2f, formants follow %.1f %%, extra formant %+.2f st, brightness %+.2f dB, magic %.2f",
@@ -708,6 +714,592 @@ TEST ("macros: switching mode and moving macros during playback stays finite and
     CHECK (allFinite (out[0]) && allFinite (out[1]));
     CHECK (peak < 4.0f);
 }
+
+// ===========================================================================
+// PHASE 3: second voice, robust auto level, consonant preservation
+// ===========================================================================
+#include "GoldenLegacy.h"
+
+namespace
+{
+// Magnitude (linear amplitude) of a sinusoid of frequency f in x[start, start+len), Goertzel/DFT bin.
+double toneAmp (const Signal& x, double fs, double f, int start, int len)
+{
+    start = std::clamp (start, 0, (int) x.size());
+    len = std::clamp (len, 0, (int) x.size() - start);
+    double re = 0, im = 0;
+    for (int i = 0; i < len; ++i)
+    {
+        const double w = 0.5 - 0.5 * std::cos (2 * vstest::kPi * i / std::max (1, len - 1)); // Hann
+        const double ph = 2 * vstest::kPi * f * i / fs;
+        re += w * x[(size_t) (start + i)] * std::cos (ph);
+        im += w * x[(size_t) (start + i)] * std::sin (ph);
+    }
+    return 2.0 * std::sqrt (re * re + im * im) / (0.5 * std::max (1, len));
+}
+double dbOf (double a) { return 20.0 * std::log10 (a + 1e-12); }
+
+Signal sine (double fs, double f, double seconds, float amp)
+{
+    Signal s ((size_t) (fs * seconds));
+    for (size_t i = 0; i < s.size(); ++i)
+        s[i] = amp * (float) std::sin (2 * vstest::kPi * f * (double) i / fs);
+    return s;
+}
+
+double rmsDb (const Signal& x, int start, int len)
+{
+    start = std::clamp (start, 0, (int) x.size());
+    len = std::clamp (len, 1, std::max (1, (int) x.size() - start));
+    double s = 0;
+    for (int i = 0; i < len; ++i) s += (double) x[(size_t) (start + i)] * x[(size_t) (start + i)];
+    return 10 * std::log10 (s / len + 1e-12);
+}
+
+vs::VoiceParams secondVoiceParams (float st = 7.0f)
+{
+    vs::VoiceParams p;
+    p.route = vs::VoiceRoute::secondVoice;
+    p.semitones = st;
+    p.autoLevel = true;
+    return p;
+}
+
+Signal speechLike (double fs)
+{
+    // 0.4 s vowel, 0.2 s pause, 0.1 s fricative noise, 0.3 s vowel (same phrase as the golden reference)
+    Signal x ((size_t) (fs * 1.2), 0.f);
+    auto v1 = vowel (fs, 190, 0.4, 0.3f, 5, 25);
+    auto v2 = vowel (fs, 230, 0.3, 0.25f, 5, 25);
+    auto n = whiteNoise ((int) (fs * 0.1), 0.05f, 3);
+    std::copy (v1.begin(), v1.end(), x.begin());
+    std::copy (n.begin(), n.end(), x.begin() + (size_t) (fs * 0.6));
+    std::copy (v2.begin(), v2.end(), x.begin() + (size_t) (fs * 0.7));
+    return x;
+}
+} // namespace
+
+TEST ("regression: route=transform, improved=false is bit-for-bit the previous (dec340d) behaviour")
+{
+    const double fs = 48000;
+    const auto x = speechLike (fs);
+    for (int mode = 0; mode < 2; ++mode)
+    {
+        vs::VoiceParams p;
+        p.mode = mode ? vs::VoiceMode::radical : vs::VoiceMode::keepIdentity;
+        if (mode) { p.mixPercent = 70; p.outputGainDb = -3; }
+        p.improved = false;
+        p.route = vs::VoiceRoute::transform;
+        vs::VocalChain chain;
+        chain.setParams (p, false);
+        chain.prepare (fs, 1, 512);
+        const auto o = run (chain, { x }, 512)[0];
+        const float* ref = mode ? golden::golden1 : golden::golden0;
+        const size_t nref = mode ? sizeof (golden::golden1) / sizeof (float) : sizeof (golden::golden0) / sizeof (float);
+        const int w = (int) (fs * 0.02);
+        double maxDiff = 0;
+        size_t k = 0;
+        for (size_t i = 0; i + (size_t) w <= o.size() && k < nref; i += (size_t) w, ++k)
+            maxDiff = std::max (maxDiff, std::abs (rmsDb (o, (int) i, w) - (double) ref[k]));
+        MEASURE ("mode %d: %zu windows compared, max |RMS difference| = %.3f dB", mode, k, maxDiff);
+        CHECK (k == nref);
+        CHECK_MSG (maxDiff < 0.05, "mode %d differs from the reference by %.3f dB", mode, maxDiff);
+    }
+}
+
+TEST ("second voice: both routes present, original untransposed at 0 dB, second voice +7 st at -9 dB")
+{
+    const double fs = 48000;
+    const double f0 = 300.0, f7 = f0 * std::pow(2.0, 7.0 / 12.0);
+    const auto x = sine (fs, f0, 3.0, 0.2f);
+    auto p = secondVoiceParams();
+    p.character = 0; p.magic = 0; // isolate routing/pitch from timbre and Magia
+    vs::VocalChain chain;
+    chain.setParams (p, false);
+    chain.prepare (fs, 1, 512);
+    const auto o = run (chain, { x }, 512)[0];
+    const int s0 = (int) (fs * 1.5), len = (int) (fs * 1.0);
+    const double aOrig = dbOf (toneAmp (o, fs, f0, s0, len)) - dbOf (0.2);
+    const double aSecond = dbOf (toneAmp (o, fs, f7, s0, len)) - dbOf (0.2);
+    const double aNoise = dbOf (toneAmp (o, fs, f0 * 1.19, s0, len)) - dbOf (0.2); // unrelated bin
+    MEASURE ("original %.2f dB (target 0), second voice %.2f dB (target -9), unrelated bin %.1f dB", aOrig, aSecond, aNoise);
+    CHECK (std::abs (aOrig) < 0.5);
+    CHECK (std::abs (aSecond + 9.0) < 2.0);
+    CHECK (aNoise < -40.0);
+    // Second voice is quieter than the original, never louder.
+    CHECK (aSecond < aOrig - 5.0);
+}
+
+TEST ("second voice: gains are independent")
+{
+    const double fs = 48000;
+    const double f0 = 300.0, f7 = f0 * std::pow(2.0, 7.0 / 12.0);
+    const auto x = sine (fs, f0, 3.0, 0.2f);
+    double orig[2], second[2];
+    int idx = 0;
+    for (float g : { -9.0f, -18.0f })
+    {
+        auto p = secondVoiceParams();
+        p.character = 0; p.magic = 0; p.secondGainDb = g;
+        vs::VocalChain chain;
+        chain.setParams (p, false);
+        chain.prepare (fs, 1, 512);
+        const auto o = run (chain, { x }, 512)[0];
+        orig[idx] = dbOf (toneAmp (o, fs, f0, (int) (fs * 1.5), (int) fs));
+        second[idx] = dbOf (toneAmp (o, fs, f7, (int) (fs * 1.5), (int) fs));
+        ++idx;
+    }
+    MEASURE ("second gain -9 -> -18 dB: original changed %+.2f dB, second voice changed %+.2f dB", orig[1] - orig[0], second[1] - second[0]);
+    CHECK (std::abs (orig[1] - orig[0]) < 0.3);
+    CHECK (std::abs ((second[1] - second[0]) + 9.0) < 0.6);
+}
+
+TEST ("second voice: alignment of both routes, artistic offset, reported latency never changes")
+{
+    const double fs = 48000;
+    // Broadband but periodic-free reference: noise bursts. Pitch 0 so route B ~ route A in time.
+    const auto x = whiteNoise ((int) (fs * 3.0), 0.1f, 11);
+    int latency = -1;
+    for (float offsetMs : { 0.0f, 10.0f, 40.0f })
+    {
+        auto p = secondVoiceParams (0.0f);
+        p.character = 0; p.magic = 0; p.autoLevel = false; p.offsetMs = offsetMs; p.secondGainDb = -6;
+        vs::VocalChain chain;
+        chain.setParams (p, false);
+        chain.prepare (fs, 1, 512);
+        if (latency < 0) latency = chain.latencySamples();
+        CHECK (chain.latencySamples() == latency); // offset must never leak into the reported latency
+        const auto o = run (chain, { x }, 512)[0];
+        // residual = out - delayed original = the second voice alone
+        const int L = chain.latencySamples();
+        Signal res (o.size(), 0.0f);
+        for (size_t i = (size_t) L; i < o.size(); ++i)
+            res[i] = o[i] - x[i - (size_t) L];
+        // find the lag (relative to the delayed original) where the residual correlates the most
+        const int a = (int) (fs * 1.0), n = (int) (fs * 1.5);
+        int bestLag = 0; double best = -1;
+        const int maxLag = (int) (fs * 0.06);
+        for (int lag = -200; lag <= maxLag; ++lag)
+        {
+            double c = 0, e1 = 0, e2 = 0;
+            for (int i = a; i < a + n; ++i)
+            {
+                const double r = res[(size_t) i];
+                const double d = x[(size_t) (i - L - lag)];
+                c += r * d; e1 += r * r; e2 += d * d;
+            }
+            const double nc = c / std::sqrt (e1 * e2 + 1e-30);
+            if (nc > best) { best = nc; bestLag = lag; }
+        }
+        const double expected = offsetMs * 0.001 * fs;
+        MEASURE ("offset %.0f ms: second voice lags the original by %d samples (expected %.0f), corr %.3f, latency %d",
+                 offsetMs, bestLag, expected, best, latency);
+        CHECK_MSG (std::abs (bestLag - expected) <= 3.0, "offset %.0f ms measured %d samples", offsetMs, bestLag);
+        CHECK (best > 0.8);
+    }
+}
+
+TEST ("second voice: silence stays silent, no noise and no gain leak")
+{
+    const double fs = 48000;
+    for (auto route : { vs::VoiceRoute::transform, vs::VoiceRoute::secondVoice })
+    {
+        auto p = secondVoiceParams();
+        p.route = route;
+        vs::VocalChain chain;
+        chain.setParams (p, false);
+        chain.prepare (fs, 2, 512);
+        Signal z ((size_t) (fs * 2), 0.0f);
+        const auto o = run (chain, { z, z }, 512);
+        const float pk = std::max (vs::peakAbs (o[0].data(), (int) z.size()), vs::peakAbs (o[1].data(), (int) z.size()));
+        MEASURE ("route %d: silence in -> peak %.3g, auto level %.2f dB", (int) route, pk, chain.autoLevelGainDb());
+        CHECK (pk == 0.0f);
+        CHECK (std::abs (chain.autoLevelGainDb()) < 0.01f);
+    }
+}
+
+TEST ("second voice: no clipping with the original at -6 dBFS (summing is gain-staged, the clipper stays idle)")
+{
+    const double fs = 48000;
+    auto v = vowel (fs, 200, 3.0, 0.5f); // -6 dBFS peak
+    for (float st : { 7.0f, 12.0f, 19.0f })
+    {
+        auto p = secondVoiceParams (st);
+        vs::VocalChain chain;
+        chain.setParams (p, false);
+        chain.prepare (fs, 1, 512);
+        const auto o = run (chain, { v }, 512)[0];
+        const float pk = vs::peakAbs (o.data(), (int) o.size());
+        MEASURE ("+%.0f st at -9 dB: output peak %.3f (%.1f dBFS), samples altered by the clipper: %ld",
+                 st, pk, 20 * std::log10 (pk), chain.clipAlteredSamples());
+        CHECK (chain.clipAlteredSamples() == 0);
+        CHECK (pk < 0.891f);
+    }
+}
+
+TEST ("second voice: mono and stereo, pan is a balance (hard right silences the second voice on the left)")
+{
+    const double fs = 48000;
+    const double f0 = 300.0, f7 = f0 * std::pow(2.0, 7.0 / 12.0);
+    const auto x = sine (fs, f0, 2.5, 0.2f);
+    auto p = secondVoiceParams();
+    p.character = 0; p.magic = 0; p.pan = 100;
+    vs::VocalChain chain;
+    chain.setParams (p, false);
+    chain.prepare (fs, 2, 512);
+    const auto o = run (chain, { x, x }, 512);
+    const int s0 = (int) (fs * 1.2), len = (int) fs;
+    const double l7 = dbOf (toneAmp (o[0], fs, f7, s0, len)), r7 = dbOf (toneAmp (o[1], fs, f7, s0, len));
+    const double l0 = dbOf (toneAmp (o[0], fs, f0, s0, len)), r0 = dbOf (toneAmp (o[1], fs, f0, s0, len));
+    MEASURE ("pan +100: second voice L %.1f dB / R %.1f dB; original L %.1f dB / R %.1f dB", l7, r7, l0, r0);
+    CHECK (l7 < r7 - 40.0);
+    CHECK (std::abs (l0 - r0) < 0.3); // the original is never panned
+    // mono works too
+    vs::VocalChain m;
+    p.pan = 0;
+    m.setParams (p, false);
+    m.prepare (fs, 1, 512);
+    const auto om = run (m, { x }, 512)[0];
+    CHECK (allFinite (om));
+    CHECK (std::abs (dbOf (toneAmp (om, fs, f7, s0, len)) - r7) < 4.5); // centre vs hard-right of a balance: <= +3 dB, plus tolerance
+}
+
+TEST ("second voice: variable host buffers give the same sound")
+{
+    const double fs = 48000;
+    const auto x = speechLike (fs);
+    Signal ref;
+    for (int pass = 0; pass < 4; ++pass)
+    {
+        vs::VocalChain chain;
+        chain.setParams (secondVoiceParams(), false);
+        chain.prepare (fs, 1, 1024);
+        Signal o;
+        if (pass == 0) o = run (chain, { x }, 512)[0];
+        else if (pass == 1) o = run (chain, { x }, 64)[0];
+        else if (pass == 2) o = run (chain, { x }, 1024)[0];
+        else o = run (chain, { x }, 700, nullptr, 5)[0];
+        if (pass == 0) { ref = o; continue; }
+        double d = 0, e = 0;
+        for (size_t i = 0; i < o.size(); ++i) { d += (double) (o[i] - ref[i]) * (o[i] - ref[i]); e += (double) ref[i] * ref[i]; }
+        const double db = 10 * std::log10 ((d + 1e-20) / (e + 1e-20));
+        MEASURE ("pass %d vs 512-sample blocks: difference %.1f dB", pass, db);
+        CHECK_MSG (db < -60.0, "pass %d differs by %.1f dB", pass, db);
+    }
+}
+
+TEST ("second voice: sample rates 44.1 / 48 / 96 kHz keep both voices and a constant ~150 ms latency")
+{
+    // A vowel (harmonic, voice-like) is used on purpose: with a single pure sine the formant
+    // compensation has no envelope to follow and the level of the shifted sine varies by up to
+    // ~17 dB with frequency at 44.1 kHz (observed in a probe; not a voice case).
+    for (double fs : { 44100.0, 48000.0, 96000.0 })
+    {
+        const auto x = vowel (fs, 200.0, 3.0, 0.3f);
+        auto p = secondVoiceParams();
+        p.character = 0; p.magic = 0;
+        vs::VocalChain chain;
+        chain.setParams (p, false);
+        chain.prepare (fs, 1, 512);
+        const auto o = run (chain, { x }, 512)[0];
+        const int L = chain.latencySamples();
+        Signal res (o.size(), 0.0f);
+        for (size_t i = (size_t) L; i < o.size(); ++i) res[i] = o[i] - x[i - (size_t) L];
+        const int s0 = (int) (fs * 1.5), len = (int) fs;
+        // original untouched
+        double dOrig = 0, eOrig = 0;
+        const Signal sil (1, 0.f); (void) sil;
+        const double wetDb = rmsDb (res, s0, len) - rmsDb (x, s0 - L, len);
+        const double ms = 1000.0 * L / fs;
+        // F0 of the second voice alone
+        vs::YinPitchDetector yin (fs);
+        auto seg = segment (res, s0, len);
+        const float f = yin.medianF0 (seg.data(), (int) seg.size());
+        const double cents = f > 0 ? centsBetween (200.0, f) : 0.0;
+        (void) dOrig; (void) eOrig;
+        MEASURE ("%.0f Hz: second voice %.2f dB relative to the original (target ~-9), its F0 moved %+.0f cents (target +700), latency %.1f ms",
+                 fs, wetDb, cents, ms);
+        CHECK (std::abs (wetDb + 9.0) < 3.0);
+        CHECK (std::abs (cents - 700.0) < 40.0);
+        CHECK (ms > 120.0 && ms < 180.0);
+    }
+}
+
+TEST ("second voice: switching route, bypass and macros during playback is click-free and bounded")
+{
+    const double fs = 48000;
+    const auto x = sine (fs, 300.0, 4.0, 0.2f);
+    const float inStep = 2 * (float) vstest::kPi * 300.0f / (float) fs * 0.2f;
+    vs::VocalChain chain;
+    chain.setParams (vs::VoiceParams {}, false);
+    chain.prepare (fs, 1, 256);
+    vs::VoiceParams p;
+    p.character = 0; p.magic = 0;
+    long altered = 0;
+    const auto o = run (chain, { x }, 256, [&] (int pos) {
+        p.route = ((pos / 12000) % 2) ? vs::VoiceRoute::secondVoice : vs::VoiceRoute::transform;
+        const bool byp = ((pos / 30000) % 3) == 2;
+        chain.setParams (p, byp);
+    })[0];
+    float maxStep = 0;
+    for (size_t i = 1; i < o.size(); ++i) maxStep = std::max (maxStep, std::abs (o[i] - o[i - 1]));
+    altered = chain.clipAlteredSamples();
+    MEASURE ("route toggled every 250 ms + bypass: max sample step %.4f (input sine step %.4f), clip-altered samples %ld", maxStep, inStep, altered);
+    CHECK (allFinite (o));
+    CHECK (maxStep < 6 * inStep);
+}
+
+TEST ("second voice: automating Pitch / Carácter / Magia stays finite and bounded")
+{
+    const double fs = 48000;
+    auto v = vowel (fs, 200, 3.0);
+    std::mt19937 rng (7);
+    vs::VocalChain chain;
+    chain.setParams (secondVoiceParams(), false);
+    chain.prepare (fs, 2, 512);
+    const auto o = run (chain, { v, v }, 256, [&] (int) {
+        auto p = secondVoiceParams ((float) ((int) (rng() % 49) - 24));
+        p.character = (float) (rng() % 101);
+        p.magic = (float) (rng() % 101);
+        p.mode = (rng() & 1) ? vs::VoiceMode::radical : vs::VoiceMode::keepIdentity;
+        chain.setParams (p, false);
+    });
+    const float pk = std::max (vs::peakAbs (o[0].data(), (int) v.size()), vs::peakAbs (o[1].data(), (int) v.size()));
+    MEASURE ("random macros every 256 samples in second-voice mode: peak %.3f", pk);
+    CHECK (allFinite (o[0]) && allFinite (o[1]));
+    CHECK (pk < 2.0f);
+}
+
+TEST ("second voice: no heap allocation or non-finite output in process() while changing route")
+{
+    const double fs = 48000;
+    auto v = vowel (fs, 200, 1.0);
+    vs::VocalChain chain;
+    chain.setParams (secondVoiceParams(), false);
+    chain.prepare (fs, 2, 512);
+    Signal a = v, b = v;
+    float* ptrs[2] = { a.data(), b.data() };
+    g_allocCount = 0;
+    g_trackAllocs = true;
+    for (int blk = 0; blk < 60; ++blk)
+    {
+        auto p = secondVoiceParams ((float) (blk % 13));
+        p.route = (blk % 4 < 2) ? vs::VoiceRoute::secondVoice : vs::VoiceRoute::transform;
+        p.offsetMs = (float) (blk % 50);
+        p.pan = (float) ((blk % 21) * 10 - 100);
+        chain.setParams (p, false);
+        chain.process (ptrs, 2, 512);
+    }
+    g_trackAllocs = false;
+    MEASURE ("allocations during 60 blocks: %ld", g_allocCount.load());
+    CHECK (g_allocCount.load() == 0);
+}
+
+TEST ("performance: second voice (stereo, 48 kHz, 512-sample blocks) CPU cost")
+{
+    const double fs = 48000;
+    const int seconds = 10;
+    auto v = vowel (fs, 200, seconds);
+    vs::VocalChain chain;
+    chain.setParams (secondVoiceParams(), false);
+    chain.prepare (fs, 2, 512);
+    std::vector<Signal> in { v, v };
+    const auto t0 = std::chrono::steady_clock::now();
+    run (chain, in, 512);
+    const double cpu = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
+    MEASURE ("second voice +7: %.3f s CPU for %d s audio -> %.1f %% of one core (this machine)", cpu, seconds, 100.0 * cpu / seconds);
+    CHECK (cpu / seconds < 0.25);
+}
+
+TEST ("level: robust matcher keeps the gain still in pauses and consonants (legacy dilutes the measurement)")
+{
+    const double fs = 48000;
+    // Reference = vowel, 1 s pause, vowel again; processed branch is 6 dB quieter.
+    const int n = (int) (fs * 4.0);
+    Signal dry ((size_t) n, 0.f), wet ((size_t) n, 0.f);
+    auto v = vowel (fs, 200, 1.2, 0.3f);
+    std::copy (v.begin(), v.end(), dry.begin());
+    std::copy (v.begin(), v.end(), dry.begin() + (size_t) (fs * 2.2));
+    for (size_t i = 0; i < dry.size(); ++i) wet[i] = dry[i] * 0.5f;
+    // low-level hiss in the pause on both branches (below the -50 dBFS gate)
+    auto hiss = whiteNoise ((int) (fs * 1.0), 0.001f, 5);
+    for (size_t i = 0; i < hiss.size(); ++i) { dry[(size_t) (fs * 1.2) + i] += hiss[i]; wet[(size_t) (fs * 1.2) + i] += hiss[i]; }
+    for (bool robust : { false, true })
+    {
+        vs::LevelMatcher lm;
+        lm.prepare (fs);
+        lm.setRobust (robust);
+        Signal w = wet;
+        double gAfterVowel = 0, gEndPause = 0, gMaxDriftInPause = 0;
+        const int blk = 128;
+        for (int pos = 0; pos + blk <= n; pos += blk)
+        {
+            const float* d[1] = { dry.data() + pos };
+            float* ww[1] = { w.data() + pos };
+            lm.process (d, ww, 1, blk);
+            if (pos + blk == (int) (fs * 1.2) / blk * blk) gAfterVowel = lm.currentGainDb();
+            if (pos > (int) (fs * 1.45) && pos < (int) (fs * 2.15))
+                gMaxDriftInPause = std::max (gMaxDriftInPause, std::abs ((double) lm.currentGainDb() - gAfterVowel));
+            if (pos + blk >= (int) (fs * 2.15) && gEndPause == 0) gEndPause = lm.currentGainDb();
+        }
+        MEASURE ("%s: gain after first vowel %.2f dB (ideal +6.02), max drift inside the pause %.2f dB, gain entering vowel 2: %.2f dB",
+                 robust ? "robust" : "legacy", gAfterVowel, gMaxDriftInPause, gEndPause);
+        if (robust)
+        {
+            CHECK (std::abs (gAfterVowel - 6.02) < 1.0);
+            CHECK (gMaxDriftInPause < 0.2);
+        }
+    }
+}
+
+TEST ("level: robust matcher never moves the gain on a short consonant dip between vowels")
+{
+    const double fs = 48000;
+    // vowel (0.8 s) -> 60 ms fricative 20 dB quieter -> vowel (0.8 s); wet is 4 dB down
+    Signal dry, wet;
+    auto v = vowel (fs, 200, 0.8, 0.3f);
+    auto f = whiteNoise ((int) (fs * 0.06), 0.02f, 4);
+    dry.insert (dry.end(), v.begin(), v.end());
+    const size_t fStart = dry.size();
+    dry.insert (dry.end(), f.begin(), f.end());
+    dry.insert (dry.end(), v.begin(), v.end());
+    wet = dry;
+    for (auto& s : wet) s *= 0.63f;
+    vs::LevelMatcher lm;
+    lm.prepare (fs);
+    lm.setRobust (true);
+    double gBefore = 0, gMin = 1e9, gMax = -1e9;
+    const int blk = 64;
+    for (int pos = 0; pos + blk <= (int) dry.size(); pos += blk)
+    {
+        const float* d[1] = { dry.data() + pos };
+        float* w[1] = { wet.data() + pos };
+        lm.process (d, w, 1, blk);
+        if (pos + blk <= (int) fStart) gBefore = lm.currentGainDb();
+        if (pos >= (int) fStart && pos < (int) (fStart + f.size()) + 2000)
+        {
+            gMin = std::min (gMin, (double) lm.currentGainDb());
+            gMax = std::max (gMax, (double) lm.currentGainDb());
+        }
+    }
+    MEASURE ("gain before the consonant %.2f dB (ideal +4.0); during/after: min %.2f max %.2f", gBefore, gMin, gMax);
+    CHECK (std::abs (gBefore - 4.0) < 1.0);
+    CHECK (gMax - gMin < 0.3);
+}
+
+TEST ("consonants: fricative noise keeps its original spectral position after +7 st when improved")
+{
+    const double fs = 48000;
+    // 6 kHz-centred noise burst: band-limited by differencing white noise twice (high-pass tilt) then masked
+    auto nz = whiteNoise ((int) (fs * 1.5), 0.2f, 9);
+    for (size_t i = nz.size() - 1; i > 1; --i) nz[i] = nz[i] - 1.6f * nz[i - 1] + 0.8f * nz[i - 2]; // emphasises highs
+    auto centroid = [&] (const Signal& s, int start, int len) {
+        double num = 0, den = 0;
+        for (double f = 500; f < 20000; f += 250)
+        {
+            const double a = toneAmp (s, fs, f, start, len);
+            num += f * a * a; den += a * a;
+        }
+        return num / (den + 1e-30);
+    };
+    double cIn = 0, cLegacy = 0, cNew = 0;
+    for (int improved = 0; improved < 2; ++improved)
+    {
+        vs::VoiceParams p;
+        p.improved = improved != 0;
+        p.autoLevel = false; p.magic = 0; p.character = 0;
+        vs::VocalChain chain;
+        chain.setParams (p, false);
+        chain.prepare (fs, 1, 512);
+        const auto o = run (chain, { nz }, 512)[0];
+        const int L = chain.latencySamples();
+        const int s0 = (int) (fs * 0.6) + L - L; // analyse the same stretch of the processed output
+        if (improved == 0) { cIn = centroid (nz, s0 - L, 24000); cLegacy = centroid (o, s0, 24000); }
+        else cNew = centroid (o, s0, 24000);
+    }
+    MEASURE ("spectral centroid: original %.0f Hz, legacy +7 st %.0f Hz, improved +7 st %.0f Hz", cIn, cLegacy, cNew);
+    CHECK (cLegacy > cIn * 1.05);                          // the old engine does shift the noise upwards
+    CHECK (std::abs (cNew - cIn) < std::abs (cLegacy - cIn)); // the improved path is closer to the original
+}
+
+
+TEST ("de-esser: attenuates sibilance, leaves vowels alone, Magia 0 % is an exact bypass")
+{
+    const double fs = 48000;
+    auto sib = whiteNoise ((int) (fs * 1.0), 0.15f, 21);
+    for (size_t i = sib.size() - 1; i > 1; --i) sib[i] = sib[i] - 1.6f * sib[i - 1] + 0.8f * sib[i - 2]; // bright noise
+    const auto vow = vowel (fs, 200, 1.0, 0.3f);
+    auto runDe = [&] (const Signal& x, float amount, float* maxGr = nullptr) {
+        vs::DeEsser d;
+        d.prepare (fs, 1);
+        d.setAmount (amount);
+        d.prepare (fs, 1); // snap the amount smoother
+        Signal y = x;
+        float gr = 0;
+        for (size_t pos = 0; pos < y.size(); pos += 256)
+        {
+            float* p = y.data() + pos;
+            d.process (&p, 1, (int) std::min<size_t> (256, y.size() - pos));
+            gr = std::max (gr, d.lastReductionDb());
+        }
+        if (maxGr) *maxGr = gr;
+        return y;
+    };
+    float grSib = 0, grVow = 0;
+    const auto s0 = runDe (sib, 0.0f), s70 = runDe (sib, 0.7f, &grSib), v70 = runDe (vow, 0.7f, &grVow);
+    CHECK (s0 == sib); // exact bypass at 0 %
+    const double sibDelta = rmsDb (s70, 24000, 20000) - rmsDb (sib, 24000, 20000);
+    const double vowDelta = rmsDb (v70, 24000, 20000) - rmsDb (vow, 24000, 20000);
+    MEASURE ("sibilant noise: %.1f dB (max reduction %.1f dB); vowel: %.2f dB (max reduction %.2f dB)", sibDelta, grSib, vowDelta, grVow);
+    CHECK (sibDelta < -3.0);
+    CHECK (std::abs (vowDelta) < 0.3);
+}
+
+TEST ("diagnosis: pitch engine measurements at +3 / +7 / +12 / +19 and -5 / -12 st (vowel with vibrato)")
+{
+    // Reproducible measurements of the real engine, used to decide what is worth changing.
+    // Nothing here is a perceptual claim.
+    const double fs = 48000;
+    const auto x = vowel (fs, 200.0, 3.0, 0.3f, 5.0, 30.0);
+    vs::YinPitchDetector yin (fs);
+    auto track = [&] (const Signal& s, int from) {
+        std::vector<double> cents;
+        const int win = 4096, hop = 1200;
+        for (int i = from; i + win < (int) s.size(); i += hop)
+        {
+            const auto est = yin.analyse (s.data() + i, win);
+            if (est.frequencyHz > 0 && est.aperiodicity < 0.3f) cents.push_back (1200.0 * std::log2 (est.frequencyHz / 200.0));
+        }
+        return cents;
+    };
+    auto spread = [] (const std::vector<double>& c) {
+        if (c.size() < 2) return 0.0;
+        double m = 0; for (double v : c) m += v; m /= (double) c.size();
+        double s = 0; for (double v : c) s += (v - m) * (v - m);
+        return std::sqrt (s / (double) c.size());
+    };
+    const double inSpread = spread (track (x, 14400));
+    for (float st : { 3.0f, 7.0f, 12.0f, 19.0f, -5.0f, -12.0f })
+    {
+        vs::VoiceParams p;
+        p.semitones = st; p.character = 0; p.magic = 0; p.autoLevel = false; p.improved = true;
+        vs::VocalChain chain;
+        chain.setParams (p, false);
+        chain.prepare (fs, 1, 512);
+        auto o = run (chain, { x }, 512)[0];
+        const int L = chain.latencySamples();
+        const auto tr = track (o, 14400 + L);
+        double mean = 0; for (double c : tr) mean += c; mean /= std::max<size_t> (1, tr.size());
+        const double sp = spread (tr);
+        // level and bandwidth
+        const double lvl = rmsDb (o, 14400 + L, 48000) - rmsDb (x, 14400, 48000);
+        MEASURE ("%+5.0f st: mean F0 error %+6.1f cents, vibrato spread %5.1f cents (input %.1f => retained %.0f %%), level change %+5.2f dB, %zu voiced frames",
+                 st, mean - st * 100.0, sp, inSpread, 100.0 * sp / std::max (1e-9, inSpread), lvl, tr.size());
+        CHECK (tr.size() > 10);
+        CHECK (std::abs (mean - st * 100.0) < 40.0);
+    }
+}
+
 
 int main (int argc, char** argv)
 {

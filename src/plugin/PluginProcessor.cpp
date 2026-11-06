@@ -118,6 +118,23 @@ ValueTree VocalShiftProcessor::migrateState (ValueTree state)
         }
         state.removeProperty (params::legacyPropEngineMode, nullptr);
     }
+    if (version < 3)
+    {
+        // v2 -> v3: projects saved before the second voice existed must sound as they did:
+        // transform route and the previous DSP (the new parameters are absent from the old state, and
+        // their defaults are "improved on", so they are written explicitly).
+        auto ensure = [&] (const char* id, float value) {
+            for (auto child : state)
+                if (child.hasType ("PARAM") && child.getProperty ("id").toString() == id)
+                    return;
+            ValueTree p ("PARAM");
+            p.setProperty ("id", id, nullptr);
+            p.setProperty ("value", value, nullptr);
+            state.appendChild (p, nullptr);
+        };
+        ensure (params::improved, 0.0f);
+        ensure (params::route, 0.0f);
+    }
     state.setProperty (params::propStateVersion, params::currentStateVersion, nullptr);
     return state;
 }

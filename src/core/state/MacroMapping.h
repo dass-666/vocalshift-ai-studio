@@ -10,7 +10,8 @@ namespace vs
 //   pitch      -> semitones
 //   formants   -> formantPreservation + formantShiftSemitones
 //   timbre     -> brightnessDb
-//   enhancement-> magic01 (compression + air), autoLevel
+//   enhancement-> magic01 (compression + air + de-esser), autoLevel
+//   routing    -> secondVoice, mix01 / secondGainDb / pan / offsetMs
 struct EngineSettings
 {
     float semitones = 0.0f;
@@ -18,16 +19,24 @@ struct EngineSettings
     float formantShiftSemitones = 0.0f; // -12..12
     float brightnessDb = 0.0f;          // -12..12
     float magic01 = 0.0f;               // 0..1
-    float mix01 = 1.0f;
+    float mix01 = 1.0f;                 // transform route
     float outputGainDb = 0.0f;
     bool safetyClip = true;
     bool autoLevel = false;
+    // Routing
+    bool secondVoice = false;
+    float secondGainDb = -9.0f;         // relative to the (unity-gain) original
+    float pan = 0.0f;                   // -1..1, second voice only
+    float offsetMs = 0.0f;              // 0..100, second voice only
+    // Revised DSP (consonant preservation, de-esser, gated level matching)
+    bool improved = false;
 };
 
 // Mapping constants (PROVISIONAL: chosen by engineering judgement, not yet
 // validated by listening tests). Kept here so they can be tuned in one place.
 struct MacroMappingConstants
 {
+    // --- Legacy mapping (dec340d, used when improved = false) -----------------------------
     // Conservar identidad
     static constexpr float identityMaxFollow = 0.25f;     // max fraction of the pitch shift that formants follow
     static constexpr float identityMaxExtraFormant = 1.0f; // st, in the pitch direction
@@ -36,8 +45,19 @@ struct MacroMappingConstants
     static constexpr float radicalMaxFollow = 1.0f;
     static constexpr float radicalMaxExtraFormant = 6.0f;
     static constexpr float radicalMaxBrightness = 6.0f;
+
+    // --- Revised mapping (improved = true) --------------------------------------------------
+    // Total formant shift (st) = Character * ( ratio * pitchSemitones + base * direction )
+    // so the timbre change scales with the size of the pitch interval instead of being constant.
+    static constexpr float identityFormantRatio = 0.25f;  // formants move 25 % of the interval at Character 100 %
+    static constexpr float identityFormantBase = 0.4f;    // st at Character 100 % even with 0 st pitch
+    static constexpr float identityBrightness = 1.0f;     // dB at Character 100 %
+    static constexpr float radicalFormantRatio = 0.7f;    // < 1: formants never move further than the pitch
+    static constexpr float radicalFormantBase = 2.0f;
+    static constexpr float radicalBrightness = 2.5f;
 };
 
+// Revised or legacy mapping depending on p.improved.
 EngineSettings mapMacros (const VoiceParams& p);
 
 } // namespace vs

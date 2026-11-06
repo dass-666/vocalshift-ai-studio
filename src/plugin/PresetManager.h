@@ -13,7 +13,7 @@ class PresetManager
 {
 public:
     static constexpr const char* fileExtension = ".vspreset";
-    static constexpr int presetFormatVersion = 2; // v1 files are still accepted
+    static constexpr int presetFormatVersion = 3; // v1 and v2 files are still accepted (and sound as before)
 
     explicit PresetManager (juce::AudioProcessorValueTreeState& state);
 

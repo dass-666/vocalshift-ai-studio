@@ -2,6 +2,7 @@
 // host-like call sequences. Uses the real VocalShiftProcessor.
 
 #include "Signals.h"
+#include <random>
 #include "TestFramework.h"
 
 #include "../src/plugin/PluginProcessor.h"
@@ -131,6 +132,9 @@ TEST ("presets: factory presets set exactly their declared values")
         CHECK (std::abs (getParam (p, vs::params::brightness) - fp.params.brightnessOffset) < 0.006f);
         CHECK (std::abs (getParam (p, vs::params::outputGain) - fp.params.outputGainDb) < 0.006f);
         CHECK ((int) getParam (p, vs::params::mode) == (int) fp.params.mode);
+        CHECK ((int) getParam (p, vs::params::route) == (int) fp.params.route);
+        CHECK (std::abs (getParam (p, vs::params::secondGain) - fp.params.secondGainDb) < 0.051f);
+        CHECK ((getParam (p, vs::params::improved) >= 0.5f) == fp.params.improved);
         CHECK (p.getPresetManager().currentPresetId() == juce::String (fp.id));
     }
     CHECK (! p.getPresetManager().applyFactoryPreset ("does_not_exist"));
@@ -293,7 +297,7 @@ TEST ("defaults: a new instance starts at the reference values (+7 st, 65 %, 70 
     CHECK (ref != nullptr && ref->params.semitones == 7.0f && ref->params.character == 65.0f && ref->params.magic == 70.0f);
 }
 
-TEST ("state: v1 project state (engineMode property, formantPreserve) migrates to v2")
+TEST ("state: v1 project state (engineMode property, formantPreserve) migrates to the current version")
 {
     // Hand-built v1 state as the first prototype saved it.
     juce::ValueTree v1 ("VocalShiftState");
@@ -317,8 +321,10 @@ TEST ("state: v1 project state (engineMode property, formantPreserve) migrates t
     CHECK (getParam (p, vs::params::semitones) == -3.0f);
     CHECK (std::abs (getParam (p, vs::params::mix) - 80.0f) < 0.051f);
     CHECK (getParam (p, vs::params::mode) == 1.0f); // engineMode=1 -> radical
-    CHECK ((int) p.getState().state.getProperty (vs::params::propStateVersion) == 2);
+    CHECK ((int) p.getState().state.getProperty (vs::params::propStateVersion) == vs::params::currentStateVersion);
     CHECK (! p.getState().state.hasProperty (vs::params::legacyPropEngineMode));
+    // A v1 project predates the revised DSP and the second voice: it must keep the old sound.
+    CHECK (getParam (p, vs::params::improved) == 0.0f && getParam (p, vs::params::route) == 0.0f);
     // Parameters absent from v1 (character/magic) keep their defaults.
     CHECK (std::abs (getParam (p, vs::params::character) - 65.0f) < 1e-4f);
 }
@@ -346,6 +352,154 @@ TEST ("macros: changing Pitch/Character/Magic/mode on the processor changes the 
              dPitch, dChar, dMagic, dMode);
     // Every macro must audibly change the signal (none is decorative).
     CHECK (dPitch > -20.0 && dChar > -30.0 && dMagic > -30.0 && dMode > -30.0);
+}
+
+TEST ("state: second-voice settings survive a save/restore round trip")
+{
+    VocalShiftProcessor a;
+    setParam (a, vs::params::route, 1);
+    setParam (a, vs::params::secondGain, -12.5f);
+    setParam (a, vs::params::pan, -40);
+    setParam (a, vs::params::offsetMs, 23.5f);
+    setParam (a, vs::params::improved, 0);
+    juce::MemoryBlock mb;
+    a.getStateInformation (mb);
+    VocalShiftProcessor b;
+    b.setStateInformation (mb.getData(), (int) mb.getSize());
+    CHECK (getParam (b, vs::params::route) == 1.0f);
+    CHECK (std::abs (getParam (b, vs::params::secondGain) + 12.5f) < 0.051f);
+    CHECK (std::abs (getParam (b, vs::params::pan) + 40.0f) < 0.51f);
+    CHECK (std::abs (getParam (b, vs::params::offsetMs) - 23.5f) < 0.051f);
+    CHECK (getParam (b, vs::params::improved) == 0.0f);
+}
+
+TEST ("compatibility: a v2 project (before the second voice) restores with the previous DSP and sounds identical")
+{
+    // Hand-built v2 state: no route/secondGain/pan/offset/improved parameters at all.
+    juce::ValueTree v2 ("VocalShiftState");
+    v2.setProperty ("stateVersion", 2, nullptr);
+    v2.setProperty ("presetId", "reference", nullptr);
+    auto addParam = [&] (const char* id, float value) {
+        juce::ValueTree c ("PARAM");
+        c.setProperty ("id", id, nullptr);
+        c.setProperty ("value", value, nullptr);
+        v2.appendChild (c, nullptr);
+    };
+    addParam ("semitones", 7.0f); addParam ("character", 65.0f); addParam ("magic", 70.0f); addParam ("mode", 0.0f);
+    juce::MemoryBlock mb;
+    juce::AudioProcessor::copyXmlToBinary (*v2.createXml(), mb);
+
+    VocalShiftProcessor old;
+    old.setStateInformation (mb.getData(), (int) mb.getSize());
+    CHECK (getParam (old, vs::params::improved) == 0.0f);
+    CHECK (getParam (old, vs::params::route) == 0.0f);
+    CHECK (std::abs (getParam (old, vs::params::secondGain) + 9.0f) < 0.051f);
+
+    const auto v = vowel (48000, 190, 2.0);
+    auto renderOf = [&] (VocalShiftProcessor& p) { p.prepareToPlay (48000, 512); return render (p, v, 512); };
+    VocalShiftProcessor explicitLegacy;
+    setParam (explicitLegacy, vs::params::improved, 0);
+    CHECK (renderOf (old) == renderOf (explicitLegacy));
+    VocalShiftProcessor fresh; // new defaults use the revised DSP
+    const auto a = renderOf (old), b = renderOf (fresh);
+    double d = 0, r = 0;
+    for (size_t i = 0; i < a.size(); ++i) { d += (double) (a[i] - b[i]) * (a[i] - b[i]); r += (double) a[i] * a[i]; }
+    MEASURE ("old project vs new default render: difference %.1f dB (the revised DSP is audibly a different sound; hence the explicit switch)",
+             10 * std::log10 ((d + 1e-20) / (r + 1e-20)));
+}
+
+TEST ("compatibility: v1 and v2 preset files load as transform route + previous DSP; v3 files keep the new fields")
+{
+    VocalShiftProcessor src;
+    src.getPresetManager().applyFactoryPreset ("high_natural");
+    for (int version : { 1, 2 })
+    {
+        auto tree = src.getPresetManager().toPresetTree ("viejo");
+        tree.setProperty ("formatVersion", version, nullptr);
+        // strip the v3 parameters as an old file would not contain them
+        for (int i = tree.getNumChildren() - 1; i >= 0; --i)
+        {
+            const auto id = tree.getChild (i).getProperty ("id").toString();
+            for (auto* n : { vs::params::route, vs::params::secondGain, vs::params::pan, vs::params::offsetMs, vs::params::improved })
+                if (id == n) { tree.removeChild (i, nullptr); break; }
+        }
+        VocalShiftProcessor p;
+        setParam (p, vs::params::route, 1); // pretend we were in second-voice mode before loading
+        CHECK (p.getPresetManager().fromPresetTree (tree).wasOk());
+        CHECK (getParam (p, vs::params::route) == 0.0f);
+        CHECK (getParam (p, vs::params::improved) == 0.0f);
+        CHECK (std::abs (getParam (p, vs::params::semitones) - 4.0f) < 1e-4f);
+    }
+    VocalShiftProcessor a;
+    a.getPresetManager().applyFactoryPreset ("second_voice_12");
+    setParam (a, vs::params::pan, 30);
+    auto t3 = a.getPresetManager().toPresetTree ("nuevo");
+    VocalShiftProcessor b;
+    CHECK (b.getPresetManager().fromPresetTree (t3).wasOk());
+    CHECK (getParam (b, vs::params::route) == 1.0f);
+    CHECK (std::abs (getParam (b, vs::params::semitones) - 12.0f) < 1e-4f);
+    CHECK (std::abs (getParam (b, vs::params::pan) - 30.0f) < 0.51f);
+    CHECK (getParam (b, vs::params::improved) == 1.0f);
+}
+
+TEST ("host: the reported latency is identical for every route / offset / improved setting")
+{
+    int latency = -1;
+    for (int route : { 0, 1 })
+        for (float offset : { 0.0f, 100.0f })
+            for (int improved : { 0, 1 })
+            {
+                VocalShiftProcessor p;
+                setParam (p, vs::params::route, (float) route);
+                setParam (p, vs::params::offsetMs, offset);
+                setParam (p, vs::params::improved, (float) improved);
+                p.prepareToPlay (48000, 512);
+                if (latency < 0) latency = p.getLatencySamples();
+                CHECK (p.getLatencySamples() == latency);
+            }
+    MEASURE ("latency across 8 combinations: %d samples", latency);
+}
+
+TEST ("host: second voice through the processor (stereo), automation, switching, bypass, buffer sizes")
+{
+    const auto v = vowel (48000, 190, 3.0);
+    VocalShiftProcessor p;
+    setParam (p, vs::params::route, 1);
+    p.prepareToPlay (48000, 512);
+    bool finite = true;
+    std::mt19937 rng (3);
+    auto out = render (p, v, 300, [&] (int pos) {
+        setParam (p, vs::params::semitones, (float) ((int) (rng() % 49) - 24));
+        setParam (p, vs::params::character, (float) (rng() % 101));
+        setParam (p, vs::params::magic, (float) (rng() % 101));
+        setParam (p, vs::params::route, (float) ((pos / 9000) % 2));
+        setParam (p, vs::params::bypass, (float) ((pos / 20000) % 4 == 3));
+    }, &finite);
+    float pk = 0;
+    for (float s : out) pk = std::max (pk, std::abs (s));
+    MEASURE ("second-voice automation through the processor: peak %.3f, finite=%d", pk, (int) finite);
+    CHECK (finite);
+    CHECK (pk < 2.0f);
+}
+
+TEST ("macros: second-voice mode adds the transposed voice and keeps the original at the front")
+{
+    const auto v = vowel (48000, 190, 2.0);
+    auto renderWith = [&] (float route) {
+        VocalShiftProcessor p;
+        setParam (p, vs::params::route, route);
+        p.prepareToPlay (48000, 512);
+        return render (p, v, 512);
+    };
+    const auto t = renderWith (0), s = renderWith (1);
+    auto rms = [] (const std::vector<float>& x, size_t a, size_t b) {
+        double e = 0; for (size_t i = a; i < b; ++i) e += (double) x[i] * x[i];
+        return 10 * std::log10 (e / (double) (b - a) + 1e-12);
+    };
+    const double dT = rms (t, 48000, 90000), dS = rms (s, 48000, 90000), dIn = rms (v, 48000 - 7200, 90000 - 7200);
+    MEASURE ("input %.1f dB, transform %.1f dB, second voice %.1f dB (expected: about +0.5 dB over the input)", dIn, dT, dS);
+    CHECK (std::abs (dS - dIn) < 3.0);   // original at unity plus a quieter second voice
+    CHECK (dS > dIn - 1.0);
 }
 
 int main (int argc, char** argv)
