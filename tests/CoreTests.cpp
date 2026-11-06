@@ -10,6 +10,8 @@
 #include <core/mix/VocalMixEngine.h>
 #include <core/mix/LevelMatcher.h>
 #include <core/dsp/DeEsser.h>
+#include <core/space/SpatialEngine.h>
+#include <core/morph/VoiceTexture.h>
 #include <core/enhance/VocalEnhancer.h>
 #include <core/state/MacroMapping.h>
 #include <core/state/FactoryPresets.h>
@@ -1297,6 +1299,412 @@ TEST ("diagnosis: pitch engine measurements at +3 / +7 / +12 / +19 and -5 / -12 
                  st, mean - st * 100.0, sp, inSpread, 100.0 * sp / std::max (1e-9, inSpread), lvl, tr.size());
         CHECK (tr.size() > 10);
         CHECK (std::abs (mean - st * 100.0) < 40.0);
+    }
+}
+
+
+// ===========================================================================
+// PHASE 4: fader, Urban Spatial Engine, Magia / Caracter redesign
+// ===========================================================================
+namespace
+{
+vs::VoiceParams urbanParams()
+{
+    return vs::findFactoryPreset ("urban_spatial")->params;
+}
+
+double corrLR (const Signal& l, const Signal& r, int a, int n)
+{
+    double lr = 0, ll = 0, rr = 0;
+    for (int i = a; i < a + n; ++i) { lr += (double) l[(size_t) i] * r[(size_t) i]; ll += (double) l[(size_t) i] * l[(size_t) i]; rr += (double) r[(size_t) i] * r[(size_t) i]; }
+    return lr / std::sqrt (ll * rr + 1e-30);
+}
+
+// Renders the second voice alone (output minus the delayed original) for a stereo chain.
+std::vector<Signal> secondVoiceOnly (const vs::VoiceParams& p, const Signal& x, double fs, int block = 512)
+{
+    vs::VocalChain chain;
+    chain.setParams (p, false);
+    chain.prepare (fs, 2, block);
+    auto o = run (chain, { x, x }, block);
+    const int L = chain.latencySamples();
+    for (auto& ch : o)
+        for (size_t i = ch.size(); i-- > 0;)
+            ch[i] = i >= (size_t) L ? ch[i] - x[i - (size_t) L] : 0.0f;
+    return o;
+}
+}
+
+TEST ("fader: -12 dB, 0 dB, +6 dB and silence set the second voice level exactly; original untouched")
+{
+    const double fs = 48000;
+    const auto x = vowel (fs, 200, 3.0, 0.3f);
+    double ref = 0;
+    for (float g : { -12.0f, 0.0f, 6.0f, -60.0f })
+    {
+        auto p = urbanParams();
+        p.spatial = false; p.secondGainDb = g;
+        const auto o = secondVoiceOnly (p, x, fs);
+        const double lvl = rmsDb (o[0], (int) (fs * 1.5), (int) fs);
+        if (g == -12.0f) ref = lvl;
+        MEASURE ("fader %+5.1f dB: second voice %.2f dB RMS (%+.2f re the -12 dB setting)", g, lvl, lvl - ref);
+        if (g == 0.0f) CHECK (std::abs ((lvl - ref) - 12.0) < 0.1);
+        if (g == 6.0f) CHECK (std::abs ((lvl - ref) - 18.0) < 0.1);
+        if (g == -60.0f) { CHECK (lvl < -100.0); CHECK (vs::peakAbs (o[0].data(), (int) o[0].size()) < 1e-6f); }
+    }
+}
+
+TEST ("fader: automation is click-free (jumps from -12 to -36 to 0 dB to silence mid-note)")
+{
+    const double fs = 48000;
+    const auto x = sine (fs, 300.0, 4.0, 0.3f);
+    vs::VocalChain chain;
+    auto p = urbanParams(); p.magic = 0; p.character = 0;
+    chain.setParams (p, false);
+    chain.prepare (fs, 2, 256);
+    const float gains[] = { -12, -36, 0, -60, -12 };
+    const auto o = run (chain, { x, x }, 256, [&] (int pos) {
+        p.secondGainDb = gains[std::min (4, pos / 40000)];
+        chain.setParams (p, false);
+    });
+    // The original (0 dB) dominates: its own max step is 2*pi*300/48000*0.3 = 0.0118; the fader may add a little.
+    float maxStep = 0;
+    for (size_t i = 1; i < o[0].size(); ++i) maxStep = std::max (maxStep, std::abs (o[0][i] - o[0][i - 1]));
+    MEASURE ("max sample step during fader jumps: %.4f (original alone: 0.0118)", maxStep);
+    CHECK (allFinite (o[0]) && allFinite (o[1]));
+    CHECK (maxStep < 0.05f);
+}
+
+TEST ("space: Magia 0 % means no spatial processing at all (bit-identical to spatial off)")
+{
+    const double fs = 48000;
+    const auto x = vowel (fs, 200, 2.5);
+    auto on = urbanParams(); on.magic = 0; on.character = 0;
+    auto off = on; off.spatial = false;
+    auto render = [&] (const vs::VoiceParams& p) {
+        vs::VocalChain c; c.setParams (p, false); c.prepare (fs, 2, 512);
+        return run (c, { x, x }, 512);
+    };
+    CHECK (render (on) == render (off));
+    // and the pitch still works at Magia 0: second voice F0 = +7 st
+    const auto sv = secondVoiceOnly (on, x, fs);
+    vs::YinPitchDetector yin (fs);
+    auto seg = segment (sv[0], (int) (fs * 1.0), (int) fs);
+    const float f = yin.medianF0 (seg.data(), (int) seg.size());
+    MEASURE ("Magia 0 %%: second voice F0 moved %+.0f cents (target +700)", centsBetween (200.0, f));
+    CHECK (std::abs (centsBetween (200.0, f) - 700.0) < 40.0);
+}
+
+TEST ("space: Magia 70 % adds real spatial processing (width, reverb tail), Magia 100 % more; mono sum preserved")
+{
+    const double fs = 48000;
+    // a short phrase followed by silence so the reverb tail can be measured
+    Signal x ((size_t) (fs * 4.0), 0.0f);
+    const auto v = vowel (fs, 200, 1.0, 0.3f);
+    std::copy (v.begin(), v.end(), x.begin());
+    double corr[3], tail[3];
+    int idx = 0;
+    for (float m : { 0.0f, 70.0f, 100.0f })
+    {
+        auto p = urbanParams(); p.magic = m; p.character = 0; p.secondGainDb = 0;
+        const auto sv = secondVoiceOnly (p, x, fs);
+        corr[idx] = corrLR (sv[0], sv[1], (int) (fs * 0.5), (int) (fs * 0.9));
+        // second voice energy 0.5 s after the end of the delayed phrase (phrase ends at 1.0 s + 150 ms latency)
+        tail[idx] = rmsDb (sv[0], (int) (fs * 1.45), (int) (fs * 0.4));
+        MEASURE ("Magia %3.0f %%: L/R correlation %.3f, tail 0.3-0.7 s after the phrase: %.1f dB", m, corr[idx], tail[idx]);
+        ++idx;
+    }
+    CHECK (corr[0] > 0.999);               // no spatial: identical channels
+    CHECK (corr[1] < 0.97 && corr[1] > 0.3); // wide but not out of phase
+    CHECK (corr[2] < corr[1]);
+    CHECK (tail[0] < -100.0);              // nothing after the phrase without space
+    CHECK (tail[1] > -75.0);               // a real, audible tail
+    CHECK (tail[2] > tail[1]);
+
+    // mono compatibility: L+R keeps the level of the non-spatial render within +-3 dB
+    auto p0 = urbanParams(); p0.magic = 70; p0.character = 0; p0.secondGainDb = 0;
+    auto pN = p0; pN.spatial = false;
+    const auto a = secondVoiceOnly (p0, x, fs), b = secondVoiceOnly (pN, x, fs);
+    Signal ma (x.size()), mb (x.size());
+    for (size_t i = 0; i < x.size(); ++i) { ma[i] = 0.5f * (a[0][i] + a[1][i]); mb[i] = 0.5f * (b[0][i] + b[1][i]); }
+    const double d = rmsDb (ma, (int) (fs * 0.4), (int) (fs * 0.9)) - rmsDb (mb, (int) (fs * 0.4), (int) (fs * 0.9));
+    MEASURE ("mono sum level with space vs without: %+.2f dB", d);
+    CHECK (std::abs (d) < 3.0);
+}
+
+TEST ("space: widening alone leaves the mono sum bit-exact (no comb cancellation by construction)")
+{
+    const double fs = 48000;
+    vs::SpatialEngine se;
+    se.prepare (fs, 2);
+    vs::SpatialParams sp; sp.amount = 1; sp.width = 0.95f; sp.modDepthMs = 0.7f;
+    se.setParams (sp);
+    auto n = whiteNoise ((int) (fs * 2), 0.2f, 5);
+    Signal l = n, r = n;
+    // let the smoothers settle first
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        l = n; r = n;
+        for (size_t pos = 0; pos < l.size(); pos += 480)
+        {
+            float* io[2] = { l.data() + pos, r.data() + pos };
+            se.process (io, 2, 480);
+        }
+    }
+    double maxDiff = 0;
+    const double norm = 1.0 / std::sqrt (1.0 + 0.5 * 0.95 * 0.95);
+    for (size_t i = (size_t) fs; i < l.size(); ++i)
+        maxDiff = std::max (maxDiff, std::abs ((double) l[i] + r[i] - 2.0 * n[i] * norm));
+    MEASURE ("max |(L+R) - 2*input*norm| with width 0.95: %.2e", maxDiff);
+    CHECK (maxDiff < 1e-5);
+    CHECK (corrLR (l, r, (int) fs, (int) fs) < 0.9);
+}
+
+TEST ("space: reverb is stable, decays, and its RT60 follows the setting; silence in -> silence out")
+{
+    const double fs = 48000;
+    for (float rt : { 0.8f, 1.8f })
+    {
+        vs::SpatialEngine se;
+        se.prepare (fs, 2);
+        vs::SpatialParams sp; sp.amount = 1; sp.reverbGain = 0.55f; sp.rt60 = rt;
+        se.setParams (sp);
+        Signal l ((size_t) (fs * 6), 0.0f), r = l;
+        l[200] = r[200] = 1.0f; // impulse after the smoothers have settled
+        // settle: process 1 s of silence first
+        Signal pre ((size_t) fs, 0.0f), pre2 = pre;
+        float* ip[2] = { pre.data(), pre2.data() };
+        se.process (ip, 2, (int) fs);
+        for (size_t pos = 0; pos < l.size(); pos += 512)
+        {
+            float* io[2] = { l.data() + pos, r.data() + pos };
+            se.process (io, 2, (int) std::min<size_t> (512, l.size() - pos));
+        }
+        CHECK (allFinite (l) && allFinite (r));
+        // Schroeder: backwards-integrated energy decay; fit -5..-25 dB, extrapolate to -60
+        std::vector<double> edc (l.size());
+        double acc = 0;
+        l[200] -= 1.0f; r[200] -= 1.0f; // remove the dry impulse: only the reverb return is measured
+        for (size_t i = l.size(); i-- > 0;) { acc += (double) l[i] * l[i] + (double) r[i] * r[i]; edc[i] = acc; }
+        auto dbAt = [&] (size_t i) { return 10 * std::log10 (edc[i] / edc[0] + 1e-30); };
+        size_t t5 = 0, t25 = 0;
+        for (size_t i = 0; i < edc.size(); ++i) { if (! t5 && dbAt (i) < -5) t5 = i; if (! t25 && dbAt (i) < -25) { t25 = i; break; } }
+        const double rt60 = 3.0 * (double) (t25 - t5) / fs;
+        MEASURE ("rt60 setting %.1f s -> measured %.2f s (EDC fit -5..-25 dB); last 0.5 s energy %.1f dB re total", rt, rt60, dbAt (l.size() - (size_t) (fs * 0.5)));
+        CHECK (rt60 > 0.5 * rt && rt60 < 1.5 * rt);
+        CHECK (dbAt (l.size() - (size_t) (fs * 0.5)) < -40.0);
+    }
+    // long noise at maximum settings: finite and bounded (no runaway feedback)
+    vs::SpatialEngine se;
+    se.prepare (fs, 2);
+    vs::SpatialParams sp; sp.amount = 1; sp.width = 0.95f; sp.reverbGain = 0.6f; sp.rt60 = 2.0f; sp.slapGain = 0.3f; sp.modDepthMs = 1.0f;
+    se.setParams (sp);
+    auto n = whiteNoise ((int) (fs * 60), 0.5f, 8);
+    Signal l = n, r = n;
+    float pk = 0;
+    for (size_t pos = 0; pos < l.size(); pos += 1024)
+    {
+        float* io[2] = { l.data() + pos, r.data() + pos };
+        se.process (io, 2, (int) std::min<size_t> (1024, l.size() - pos));
+    }
+    for (size_t i = 0; i < l.size(); ++i) pk = std::max ({ pk, std::abs (l[i]), std::abs (r[i]) });
+    MEASURE ("60 s of full-scale-ish noise at the maximum settings: peak %.2f (input peak 0.5)", pk);
+    CHECK (allFinite (l) && allFinite (r));
+    CHECK (pk < 4.0f);
+    Signal z ((size_t) (fs * 3), 0.0f), z2 = z;
+    se.reset();
+    float* zp[2] = { z.data(), z2.data() };
+    se.process (zp, 2, (int) z.size());
+    CHECK (vs::peakAbs (z.data(), (int) z.size()) == 0.0f && vs::peakAbs (z2.data(), (int) z2.size()) == 0.0f);
+}
+
+TEST ("space: slap delay is stable (feedback < 1), follows the host tempo and falls back to 115 ms")
+{
+    const double fs = 48000;
+    for (double bpm : { 0.0, 90.0, 140.0 })
+    {
+        vs::SpatialEngine se;
+        se.prepare (fs, 2);
+        se.setTempoBpm (bpm);
+        vs::SpatialParams sp; sp.amount = 1; sp.slapGain = 0.3f;
+        se.setParams (sp);
+        Signal pre ((size_t) fs, 0.0f), pre2 = pre;
+        float* ip[2] = { pre.data(), pre2.data() };
+        se.process (ip, 2, (int) fs);
+        Signal l ((size_t) (fs * 3), 0.0f), r = l;
+        l[1000] = r[1000] = 1.0f;
+        float* io[2] = { l.data(), r.data() };
+        se.process (io, 2, (int) l.size());
+        // first echo position on L
+        size_t peak = 0; float best = 0;
+        for (size_t i = 3000; i < l.size(); ++i) if (std::abs (l[i]) > best) { best = std::abs (l[i]); peak = i; }
+        double expectedMs = 115.0;
+        if (bpm > 0) { expectedMs = 60000.0 / bpm / 4.0; while (expectedMs < 70) expectedMs *= 2; while (expectedMs > 180) expectedMs *= 0.5; }
+        const double ms = (double) (peak - 1000) * 1000.0 / fs;
+        double late = 0; for (size_t i = (size_t) (fs * 2); i < l.size(); ++i) late = std::max (late, (double) std::abs (l[i]));
+        MEASURE ("tempo %.0f: first echo at %.1f ms (expected ~%.1f ms), level %.3f, residual after 2 s: %.2e", bpm, ms, expectedMs, best, late);
+        CHECK (allFinite (l));
+        CHECK (std::abs (ms - expectedMs) < 8.0);   // filters add a little group delay
+        CHECK (late < 1e-3);
+    }
+}
+
+TEST ("space: mono hosts are untouched; stereo spatial adds no reported latency")
+{
+    const double fs = 48000;
+    const auto x = vowel (fs, 200, 2.0);
+    auto p = urbanParams();
+    auto ps = p; ps.spatial = false;
+    auto mono = [&] (const vs::VoiceParams& q) { vs::VocalChain c; c.setParams (q, false); c.prepare (fs, 1, 512); return run (c, { x }, 512)[0]; };
+    const auto mA = mono (p), mB = mono (ps);
+    // In mono only the Caracter texture differs; no width/reverb/echo can exist (single channel): finite and bounded
+    CHECK (allFinite (mA));
+    vs::VocalChain c1, c2;
+    c1.setParams (p, false); c1.prepare (fs, 2, 512);
+    c2.setParams (ps, false); c2.prepare (fs, 2, 512);
+    MEASURE ("latency with space %d, without %d samples; spatial memory %ld kB", c1.latencySamples(), c2.latencySamples(), c1.spatialMemoryBytes() / 1024);
+    CHECK (c1.latencySamples() == c2.latencySamples());
+}
+
+TEST ("caracter: texture adds body/presence/warmth (not just treble), 0 % is a bypass, sibilants stay clean")
+{
+    const double fs = 48000;
+    const auto x = vowel (fs, 200, 2.0, 0.2f);
+    const auto xLow = vowel (fs, 110, 2.0, 0.2f);
+    auto texRun = [&] (float c, const Signal& in) {
+        vs::VoiceTexture t; t.setAmount (c); t.prepare (fs, 1);
+        Signal y = in;
+        for (size_t pos = 0; pos < y.size(); pos += 256) { float* p = y.data() + pos; t.process (&p, 1, (int) std::min<size_t> (256, y.size() - pos)); }
+        return y;
+    };
+    CHECK (texRun (0.0f, x) == x);
+    const auto y0 = texRun (0.0f, x), y65 = texRun (0.65f, x), y100 = texRun (1.0f, x);
+    auto band = [&] (const Signal& s, double f) { return dbOf (toneAmp (s, fs, f, (int) fs, (int) fs)); };
+    // design: low shelf 220 Hz +1.95 dB (c = 0.65) -> measured on the 110 Hz fundamental of a second vowel;
+    // peak 3 kHz +1.43 dB -> 15th harmonic of the 200 Hz vowel; 9 kHz must not move.
+    const auto b0 = texRun (0.0f, xLow), b65 = texRun (0.65f, xLow);
+    const double body = band (b65, 110) - band (b0, 110), pres = band (y65, 3000) - band (y0, 3000), tre = band (y65, 9000) - band (y0, 9000);
+    MEASURE ("Caracter 65 %%: body (110 Hz) %+.2f dB (design +1.9), presence (3 kHz) %+.2f dB (design +1.4), treble (9 kHz) %+.2f dB", body, pres, tre);
+    CHECK (body > 1.0 && pres > 0.5);
+    CHECK (std::abs (tre) < 1.0);            // it is not a treble boost
+    CHECK (allFinite (y100));
+    // sibilance protection: the saturator only sees < 1.8 kHz
+    auto sib = whiteNoise ((int) (fs * 1.0), 0.1f, 4);
+    for (size_t i = sib.size() - 1; i > 1; --i) sib[i] = sib[i] - 1.6f * sib[i - 1] + 0.8f * sib[i - 2];
+    const double dS = rmsDb (texRun (1.0f, sib), 12000, 24000) - rmsDb (sib, 12000, 24000);
+    MEASURE ("Caracter 100 %% on bright noise: %+.2f dB", dS);
+    CHECK (std::abs (dS) < 2.0);
+}
+
+TEST ("caracter + magia: urban preset at equal loudness differs audibly from Phase 3, loudness stays within 2 dB")
+{
+    const double fs = 48000;
+    const auto x = speechLike (fs);
+    auto p3 = urbanParams(); p3.spatial = false; p3.secondGainDb = -12;
+    auto p4 = urbanParams();
+    const auto a = secondVoiceOnly (p3, x, fs), b = secondVoiceOnly (p4, x, fs);
+    const double la = rmsDb (a[0], 7200, (int) (fs * 1.2)), lb = rmsDb (b[0], 7200, (int) (fs * 1.2));
+    double d = 0, e = 0;
+    for (size_t i = 0; i < a[0].size(); ++i) { d += (double) (a[0][i] - b[0][i]) * (a[0][i] - b[0][i]); e += (double) a[0][i] * a[0][i]; }
+    MEASURE ("second voice level: Phase 3 %.1f dB, Phase 4 %.1f dB (%+.1f); difference between renders %.1f dB", la, lb, lb - la, 10 * std::log10 (d / e));
+    CHECK (std::abs (lb - la) < 2.5);
+    CHECK (10 * std::log10 (d / e) > -12.0);
+}
+
+TEST ("urban preset: output stays below the clip threshold; presets switch during playback without clicks or NaN")
+{
+    const double fs = 48000;
+    auto v = vowel (fs, 200, 4.0, 0.5f); // -6 dBFS
+    vs::VocalChain chain;
+    chain.setParams (urbanParams(), false);
+    chain.prepare (fs, 2, 256);
+    const auto& presets = vs::factoryPresets();
+    const auto o = run (chain, { v, v }, 256, [&] (int pos) {
+        chain.setParams (presets[(size_t) ((pos / 6000) % (int) presets.size())].params, false);
+    });
+    const float pk = std::max (vs::peakAbs (o[0].data(), (int) v.size()), vs::peakAbs (o[1].data(), (int) v.size()));
+    MEASURE ("every factory preset in turn every 125 ms: peak %.3f, clip-altered samples %ld", pk, chain.clipAlteredSamples());
+    CHECK (allFinite (o[0]) && allFinite (o[1]));
+    CHECK (pk < 1.0f);
+    // static: urban preset at -6 dBFS input stays clear of the clipper
+    vs::VocalChain c2;
+    c2.setParams (urbanParams(), false);
+    c2.prepare (fs, 2, 512);
+    run (c2, { v, v }, 512);
+    MEASURE ("urban preset, input -6 dBFS: clip-altered samples %ld", c2.clipAlteredSamples());
+    CHECK (c2.clipAlteredSamples() == 0);
+}
+
+TEST ("realtime: zero allocations with the spatial engine, fader automation and preset switching")
+{
+    const double fs = 48000;
+    auto v = vowel (fs, 200, 1.0);
+    vs::VocalChain chain;
+    chain.setParams (urbanParams(), false);
+    chain.prepare (fs, 2, 512);
+    Signal a = v, b = v;
+    float* ptrs[2] = { a.data(), b.data() };
+    const auto& presets = vs::factoryPresets();
+    g_allocCount = 0; g_trackAllocs = true;
+    for (int blk = 0; blk < 80; ++blk)
+    {
+        auto p = presets[(size_t) (blk % (int) presets.size())].params;
+        p.secondGainDb = -60.0f + (float) (blk % 66);
+        p.magic = (float) ((blk * 7) % 101);
+        chain.setTempoBpm (80.0 + blk);
+        chain.setParams (p, false);
+        chain.process (ptrs, 2, 512);
+    }
+    g_trackAllocs = false;
+    MEASURE ("allocations during 80 blocks: %ld", g_allocCount.load());
+    CHECK (g_allocCount.load() == 0);
+}
+
+TEST ("performance: Phase 4 urban preset vs Phase 3 second voice (stereo, 48 kHz, 512 blocks)")
+{
+    const double fs = 48000;
+    const int seconds = 10;
+    auto v = vowel (fs, 200, seconds);
+    auto timeIt = [&] (const vs::VoiceParams& p) {
+        vs::VocalChain chain;
+        chain.setParams (p, false);
+        chain.prepare (fs, 2, 512);
+        const auto t0 = std::chrono::steady_clock::now();
+        run (chain, { v, v }, 512);
+        return std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count() / seconds;
+    };
+    auto p3 = urbanParams(); p3.spatial = false;
+    timeIt (p3);
+    const double c3 = timeIt (p3), c4 = timeIt (urbanParams());
+    MEASURE ("Phase 3 second voice %.1f %% of one core, Phase 4 urban preset %.1f %% (%+.1f points)", 100 * c3, 100 * c4, 100 * (c4 - c3));
+    CHECK (c4 < 0.25);
+}
+
+TEST ("regression: Phase 3 second-voice presets keep their exact Phase 3 sound (spatial off)")
+{
+    for (const char* id : { "second_voice_7", "second_voice_12" })
+    {
+        const auto* fp = vs::findFactoryPreset (id);
+        CHECK (fp != nullptr && ! fp->params.spatial);
+        const auto e = vs::mapMacros (fp->params);
+        CHECK (e.spatialAmount == 0.0f && e.textureAmount == 0.0f && e.spaceReverb == 0.0f);
+        CHECK (e.secondGainDb == -9.0f);
+    }
+    const auto u = vs::mapMacros (urbanParams());
+    MEASURE ("urban preset mapping: width %.3f, reverb %.3f, rt60 %.2f s, slap %.3f, mod %.2f ms, texture %.2f, fader %.1f dB",
+             u.spaceWidth, u.spaceReverb, u.spaceRt60, u.spaceSlap, u.spaceModMs, u.textureAmount, u.secondGainDb);
+    CHECK (u.secondVoice && u.secondGainDb == -12.0f && u.semitones == 7.0f);
+    // Magia curves: 0 -> nothing; monotonic; 30 % discreet; 100 % stronger but bounded
+    float prevW = -1, prevR = -1;
+    for (int m = 0; m <= 100; m += 10)
+    {
+        auto p = urbanParams(); p.magic = (float) m;
+        const auto e = vs::mapMacros (p);
+        CHECK (e.spaceWidth >= prevW && e.spaceReverb >= prevR);
+        CHECK (e.spaceWidth <= 0.95f && e.spaceReverb <= 0.55f && e.spaceSlap <= 0.28f);
+        if (m == 0) CHECK (e.spaceWidth == 0.0f && e.spaceReverb == 0.0f && e.spaceSlap == 0.0f);
+        if (m == 30) CHECK (e.spaceWidth < 0.25f && e.spaceReverb < 0.12f && e.spaceSlap == 0.0f);
+        prevW = e.spaceWidth; prevR = e.spaceReverb;
     }
 }
 

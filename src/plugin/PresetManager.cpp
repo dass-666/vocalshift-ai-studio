@@ -67,6 +67,14 @@ Result PresetManager::fromPresetTree (const ValueTree& t)
         setParam (params::pan, 0.0f);
         setParam (params::offsetMs, 0.0f);
     }
+    if (version < 4)
+    {
+        // Presets from before the Urban Spatial Engine keep their previous sound.
+        setParam (params::spatial, 0.0f);
+        setParam (params::spaceWidth, 100.0f);
+        setParam (params::spaceReverb, 100.0f);
+        setParam (params::spaceDelay, 100.0f);
+    }
     for (auto child : t)
     {
         const String id = child.getProperty ("id");

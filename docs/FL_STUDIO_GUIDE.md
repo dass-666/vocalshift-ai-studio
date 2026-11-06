@@ -51,6 +51,18 @@ El protocolo detallado con puntuaciones está en `EXPERIMENT_01_VOZ_REAL.md`.
 
 **No se ha probado la v0.3 en FL Studio.** Hasta que lo hagas tú, solo está comprobada con pluginval y las pruebas automáticas.
 
+## 5c. Pruebas de la v0.4 (Urbano Espacial, 10 minutos)
+
+1. Elige el preset **«Urbano Espacial — Segunda voz»**: Segunda voz, Identidad, Pitch +7, Carácter 65 %, Magia 70 %, fader −12 dB.
+2. Canta o reproduce tu voz: la original debe seguir al frente, claramente dominante, con una segunda voz ancha y con reverb detrás.
+3. Mueve el **fader vertical** (doble clic = −12 dB). En −∞ la segunda voz desaparece; automatízalo desde FL (clic derecho → crear clip de automatización): no debe haber clics.
+4. Mueve **Magia** de 0 a 100 %: 0 % = sin espacio; 70 % = amplio; 100 % = más atmosférico. Mueve **Carácter** (cuerpo y presencia, no solo brillo).
+5. Mono: pon el canal del Mixer en mono (o suma L+R): el nivel no debe caer de forma evidente. Cambia entre Transformar y Segunda voz, presets y modos sonando.
+6. Abre un proyecto de la v0.3: debe sonar igual que antes (espacio apagado). Pro → «Procesamiento espacial» lo activa.
+7. Si FL informa el tempo, el eco corto lo sigue (1/16 plegado a 70–180 ms).
+
+**No se ha probado la v0.4 en FL Studio.**
+
 ## 6. Qué reportar
 Versión de FL Studio, tamaño de buffer (*Options → Audio settings*), frecuencia de muestreo, CPU que muestra FL,
 y cualquier: fallo al escanear, cuelgue, clic, desincronización con otras pistas, valores que no se restauran.

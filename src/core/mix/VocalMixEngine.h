@@ -20,6 +20,7 @@ class VocalMixEngine
 {
 public:
     static constexpr float maxOffsetMs = 100.0f;
+    static constexpr float faderSilenceDb = -59.9f; // at or below: second voice fully muted
 
     void prepare (double sampleRate, int numChannels, int maxBlockSize, int latencySamples);
     void reset();

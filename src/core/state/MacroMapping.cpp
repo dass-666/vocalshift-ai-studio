@@ -1,6 +1,7 @@
 #include "MacroMapping.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace vs
 {
@@ -46,10 +47,23 @@ EngineSettings mapMacros (const VoiceParams& p)
     e.safetyClip = p.safetyClip;
     e.autoLevel = p.autoLevel;
     e.secondVoice = p.route == VoiceRoute::secondVoice;
-    e.secondGainDb = std::clamp (p.secondGainDb, -30.0f, 0.0f);
+    e.secondGainDb = std::clamp (p.secondGainDb, -60.0f, 6.0f);
     e.pan = std::clamp (p.pan, -100.0f, 100.0f) / 100.0f;
     e.offsetMs = std::clamp (p.offsetMs, 0.0f, 100.0f);
     e.improved = p.improved;
+
+    if (p.improved && p.spatial && p.route == VoiceRoute::secondVoice)
+    {
+        const float m = std::clamp (p.magic, 0.0f, 100.0f) / 100.0f;
+        const auto trim = [] (float v) { return std::clamp (v, 0.0f, 100.0f) / 100.0f; };
+        e.spatialAmount = 1.0f;
+        e.spaceWidth = 0.95f * std::pow (m, 1.4f) * trim (p.spaceWidth);
+        e.spaceReverb = 0.55f * std::pow (m, 1.5f) * trim (p.spaceReverb);
+        e.spaceRt60 = 0.8f + 1.0f * m;
+        e.spaceSlap = 0.28f * std::pow (std::clamp ((m - 0.4f) / 0.6f, 0.0f, 1.0f), 1.2f) * trim (p.spaceDelay);
+        e.spaceModMs = 0.2f + 0.5f * m;
+        e.textureAmount = c;
+    }
     return e;
 }
 

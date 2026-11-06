@@ -119,12 +119,12 @@ int main (int argc, char** argv)
         // Renders the real editor (Easy and Pro pages) to PNG, for documentation/visual checks.
         vs::VocalShiftProcessor p;
         p.prepareToPlay (48000, 512);
-        p.getPresetManager().applyFactoryPreset ("reference");
+        p.getPresetManager().applyFactoryPreset ("urban_spatial");
         for (auto mode : { "easy", "pro" })
         {
             p.getState().state.setProperty (vs::params::propUiMode, mode, nullptr);
             std::unique_ptr<AudioProcessorEditor> ed (p.createEditor());
-            ed->setSize (900, 680);
+            ed->setSize (940, 700);
             auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 2.0f);
             File f = outDir.getChildFile (String ("ui_") + mode + ".png");
             f.deleteFile();
@@ -214,6 +214,22 @@ int main (int argc, char** argv)
         cases.push_back ({ "exp02_G_segunda_voz_+7_caracter65", [second] (vs::VocalShiftProcessor& p) { second (p, 7, 65, 70); }, 999.0f });
         cases.push_back ({ "exp02_H_segunda_voz_+7_magia0", [second] (vs::VocalShiftProcessor& p) { second (p, 7, 65, 0); }, 999.0f });
         cases.push_back ({ "exp02_I_segunda_voz_+7_magia70", [second] (vs::VocalShiftProcessor& p) { second (p, 7, 65, 70); }, 999.0f });
+        // Experiment 03 (Phase 4): see docs/EXPERIMENT_03_URBANO_ESPACIAL.md. Same take, equal RMS.
+        auto urban = [setP] (vs::VocalShiftProcessor& p, float character, float magic, bool spatial, float delayTrim) {
+            p.getPresetManager().applyFactoryPreset ("urban_spatial"); // route, +7 st, -12 dB, identity
+            setP (p, vs::params::character, character);
+            setP (p, vs::params::magic, magic);
+            setP (p, vs::params::spatial, spatial ? 1.0f : 0.0f);
+            setP (p, vs::params::spaceDelay, delayTrim);
+        };
+        cases.push_back ({ "exp03_A_fase3_segunda_voz_+7", [setP] (vs::VocalShiftProcessor& p) { p.getPresetManager().applyFactoryPreset ("second_voice_7"); }, 999.0f });
+        cases.push_back ({ "exp03_B_urbano_+7_c65_m70_-12dB", [urban] (vs::VocalShiftProcessor& p) { urban (p, 65, 70, true, 100); }, 999.0f });
+        cases.push_back ({ "exp03_C_magia0", [urban] (vs::VocalShiftProcessor& p) { urban (p, 65, 0, true, 100); }, 999.0f });
+        cases.push_back ({ "exp03_D_magia100", [urban] (vs::VocalShiftProcessor& p) { urban (p, 65, 100, true, 100); }, 999.0f });
+        cases.push_back ({ "exp03_E_caracter0", [urban] (vs::VocalShiftProcessor& p) { urban (p, 0, 70, true, 100); }, 999.0f });
+        cases.push_back ({ "exp03_F_caracter100", [urban] (vs::VocalShiftProcessor& p) { urban (p, 100, 70, true, 100); }, 999.0f });
+        cases.push_back ({ "exp03_G_espacial_desactivado", [urban] (vs::VocalShiftProcessor& p) { urban (p, 65, 70, false, 100); }, 999.0f });
+        cases.push_back ({ "exp03_H_anchura_y_reverb_sin_eco", [urban] (vs::VocalShiftProcessor& p) { urban (p, 65, 70, true, 0); }, 999.0f });
         // Comparison across intervals (improved path) for the engine-naturalness question.
         for (int st : { 3, 7, 12, 19, -5, -12 })
             cases.push_back ({ String ("exp02_intervalo_") + (st > 0 ? "+" : "") + String (st) + "st_mejorado",

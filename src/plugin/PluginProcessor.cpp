@@ -57,6 +57,9 @@ void VocalShiftProcessor::runChain (AudioBuffer<float>& buffer, bool forceBypass
     if (n == 0)
         return;
 
+    if (auto* ph = getPlayHead())
+        if (auto pos = ph->getPosition())
+            chain.setTempoBpm (pos->getBpm().orFallback (0.0));
     chain.setParams (raw.read(), forceBypass || raw.isBypassed());
     chain.process (buffer.getArrayOfWritePointers(), jmin (numOut, buffer.getNumChannels()), n);
 
@@ -64,6 +67,8 @@ void VocalShiftProcessor::runChain (AudioBuffer<float>& buffer, bool forceBypass
     const float outP = chain.lastOutputPeak();
     if (inP > inputPeak.load()) inputPeak.store (inP);
     if (outP > outputPeak.load()) outputPeak.store (outP);
+    const float spP = chain.lastSecondVoicePeak();
+    if (spP > secondPeak.load()) secondPeak.store (spP);
     if (inP >= 1.0f) inputClip.store (true);
     if (outP >= 0.999f) outputClip.store (true);
 }
@@ -134,6 +139,21 @@ ValueTree VocalShiftProcessor::migrateState (ValueTree state)
         };
         ensure (params::improved, 0.0f);
         ensure (params::route, 0.0f);
+    }
+    if (version < 4)
+    {
+        // v3 -> v4: Phase 3 projects must keep their sound: no spatial processing, no texture.
+        bool found = false;
+        for (auto child : state)
+            if (child.hasType ("PARAM") && child.getProperty ("id").toString() == params::spatial)
+                found = true;
+        if (! found)
+        {
+            ValueTree p ("PARAM");
+            p.setProperty ("id", params::spatial, nullptr);
+            p.setProperty ("value", 0.0f, nullptr);
+            state.appendChild (p, nullptr);
+        }
     }
     state.setProperty (params::propStateVersion, params::currentStateVersion, nullptr);
     return state;

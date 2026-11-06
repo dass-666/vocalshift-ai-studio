@@ -30,6 +30,14 @@ struct EngineSettings
     float offsetMs = 0.0f;              // 0..100, second voice only
     // Revised DSP (consonant preservation, de-esser, gated level matching)
     bool improved = false;
+    // Phase 4: Urban Spatial Engine + Caracter texture (second voice, improved, spatial). All 0 = off.
+    float spatialAmount = 0.0f;    // 0 or 1 (route / switch), smoothed downstream
+    float spaceWidth = 0.0f;       // 0..0.95
+    float spaceReverb = 0.0f;      // linear return, 0..0.6
+    float spaceRt60 = 1.2f;        // s
+    float spaceSlap = 0.0f;        // linear return, 0..0.3
+    float spaceModMs = 0.4f;       // ms
+    float textureAmount = 0.0f;    // 0..1 (Caracter) -> VoiceTexture
 };
 
 // Mapping constants (PROVISIONAL: chosen by engineering judgement, not yet
@@ -57,6 +65,13 @@ struct MacroMappingConstants
     static constexpr float radicalBrightness = 2.5f;
 };
 
+// Magia (second voice, spatial): m = Magia / 100, perceptual curves (not linear):
+//   width   = 0.95 m^1.4          30 % -> 0.18   70 % -> 0.58   100 % -> 0.95
+//   reverb  = 0.55 m^1.5          30 % -> 0.09   70 % -> 0.32   100 % -> 0.55  (linear return, re the second voice)
+//   rt60    = 0.8 + 1.0 m  s
+//   slap    = 0.28 * clamp((m - 0.4) / 0.6)^1.2   (off below 40 %)   70 % -> 0.12   100 % -> 0.28
+//   mod     = 0.2 + 0.5 m  ms
+//   Magia 0 -> all zero (no spatial processing at all).  Pro trims scale width / reverb / slap.
 // Revised or legacy mapping depending on p.improved.
 EngineSettings mapMacros (const VoiceParams& p);
 

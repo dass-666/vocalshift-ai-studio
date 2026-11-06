@@ -22,6 +22,15 @@ static VoiceParams make (VoiceMode mode, float st, float character, float magic,
     p.magic = magic;
     p.formantOffset = formantOffset;
     p.brightnessOffset = brightnessOffset;
+    p.spatial = false; // the presets that existed before Phase 4 keep their Phase 3 sound
+    return p;
+}
+
+static VoiceParams urbanSpatial()
+{
+    VoiceParams p = make (VoiceMode::keepIdentity, 7, 65, 70, 0, 0, VoiceRoute::secondVoice);
+    p.secondGainDb = -12.0f;
+    p.spatial = true;
     return p;
 }
 
@@ -31,6 +40,9 @@ const std::vector<FactoryPreset>& factoryPresets()
     // Every value is a real, implemented parameter. Character/Magic mappings are
     // provisional and must be calibrated with human-voice listening tests.
     static const std::vector<FactoryPreset> presets {
+        { "urban_spatial", "Urbano Espacial — Segunda voz", "Tu voz al frente y una segunda voz +7 st a −12 dB: ancha, con reverb y eco corto controlados, cuerpo y presencia. Magia manda el espacio, Carácter el color.",
+          urbanSpatial() },
+
         { "reference", "Referencia (+7 · 65 % · 70 %)", "Valores de referencia del proyecto: +7 st, Carácter 65 %, Magia 70 %, conservando identidad.",
           make (M::keepIdentity, 7, 65, 70) },
 

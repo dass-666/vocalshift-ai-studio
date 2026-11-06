@@ -8,6 +8,8 @@
 #include "dsp/PitchShifter.h"
 #include "mix/VocalMixEngine.h"
 #include "morph/ToneShaper.h"
+#include "morph/VoiceTexture.h"
+#include "space/SpatialEngine.h"
 #include "state/MacroMapping.h"
 
 #include <atomic>
@@ -51,6 +53,12 @@ public:
     // Output samples the last-resort soft clip has altered (should stay 0 at sane levels).
     long clipAlteredSamples() const { return mixer.clipAlteredSamples(); }
     // Whether the robust level matcher currently considers the voice active (diagnostics).
+    // Host tempo (BPM, 0 = unknown) for the slap delay; call from the audio thread before process().
+    void setTempoBpm (double bpm) { space.setTempoBpm (bpm); }
+    // Peak of the second voice (voice + space, after the fader) in the last block; 0 outside second-voice mode.
+    float lastSecondVoicePeak() const { return secondPeak; }
+    long spatialMemoryBytes() const { return space.memoryBytes(); }
+    bool spatialActive() const { return space.isActive(); }
     float lastDeEssReductionDb() const { return deEsser.lastReductionDb(); }
     bool levelVoiceActive() const { return levelMatcher.voiceActive(); }
 
@@ -60,6 +68,10 @@ private:
     std::unique_ptr<IPitchShifter> shifter;
     ConsonantBlend consonants;
     DeEsser deEsser;
+    VoiceTexture texture;
+    SpatialEngine space;
+    float secondGainLin = 0.0f, secondPeak = 0.0f;
+    bool secondVoiceOn = false;
     ToneShaper tone;
     VocalEnhancer enhancer;
     LevelMatcher levelMatcher;

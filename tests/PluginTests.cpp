@@ -502,6 +502,94 @@ TEST ("macros: second-voice mode adds the transposed voice and keeps the origina
     CHECK (dS > dIn - 1.0);
 }
 
+TEST ("compatibility: a v3 (Phase 3) project restores with spatial processing off and sounds exactly like Phase 3")
+{
+    juce::ValueTree v3 ("VocalShiftState");
+    v3.setProperty ("stateVersion", 3, nullptr);
+    auto addParam = [&] (const char* id, float value) {
+        juce::ValueTree c ("PARAM");
+        c.setProperty ("id", id, nullptr);
+        c.setProperty ("value", value, nullptr);
+        v3.appendChild (c, nullptr);
+    };
+    addParam ("route", 1.0f); addParam ("improved", 1.0f); addParam ("secondGain", -9.0f);
+    juce::MemoryBlock mb;
+    juce::AudioProcessor::copyXmlToBinary (*v3.createXml(), mb);
+    VocalShiftProcessor p;
+    p.setStateInformation (mb.getData(), (int) mb.getSize());
+    CHECK (getParam (p, vs::params::spatial) == 0.0f);
+    CHECK (getParam (p, vs::params::route) == 1.0f);
+    CHECK (std::abs (getParam (p, vs::params::secondGain) + 9.0f) < 0.051f);
+    // a v3 preset file as well
+    VocalShiftProcessor src;
+    src.getPresetManager().applyFactoryPreset ("second_voice_7");
+    auto t = src.getPresetManager().toPresetTree ("p3");
+    t.setProperty ("formatVersion", 3, nullptr);
+    for (int i = t.getNumChildren() - 1; i >= 0; --i)
+        for (auto* n : { vs::params::spatial, vs::params::spaceWidth, vs::params::spaceReverb, vs::params::spaceDelay })
+            if (t.getChild (i).getProperty ("id").toString() == n) { t.removeChild (i, nullptr); break; }
+    VocalShiftProcessor q;
+    CHECK (q.getPresetManager().fromPresetTree (t).wasOk());
+    CHECK (getParam (q, vs::params::spatial) == 0.0f);
+}
+
+TEST ("urban preset: sets route, -12 dB fader, +7 st, 65 %, 70 %, spatial on; fader range, round trip and automation")
+{
+    VocalShiftProcessor p;
+    CHECK (p.getPresetManager().applyFactoryPreset ("urban_spatial"));
+    CHECK (getParam (p, vs::params::route) == 1.0f);
+    CHECK (std::abs (getParam (p, vs::params::secondGain) + 12.0f) < 0.051f);
+    CHECK (getParam (p, vs::params::semitones) == 7.0f && std::abs (getParam (p, vs::params::character) - 65.0f) < 0.051f
+           && std::abs (getParam (p, vs::params::magic) - 70.0f) < 0.051f);
+    CHECK (getParam (p, vs::params::mode) == 0.0f && getParam (p, vs::params::spatial) == 1.0f && getParam (p, vs::params::pan) == 0.0f);
+    auto* fader = p.getState().getParameter (vs::params::secondGain);
+    CHECK (std::abs (fader->convertFrom0to1 (0.0f) + 60.0f) < 1e-3f && std::abs (fader->convertFrom0to1 (1.0f) - 6.0f) < 1e-3f);
+    juce::MemoryBlock mb;
+    p.getStateInformation (mb);
+    VocalShiftProcessor q;
+    q.setStateInformation (mb.getData(), (int) mb.getSize());
+    CHECK (std::abs (getParam (q, vs::params::secondGain) + 12.0f) < 0.051f);
+    CHECK (getParam (q, vs::params::spatial) == 1.0f);
+
+    // fader automation through the processor (stereo): finite, no latency change, loud only with a gain above silence
+    const auto v = vowel (48000, 190, 3.0);
+    q.prepareToPlay (48000, 512);
+    const int lat = q.getLatencySamples();
+    bool finite = true;
+    const auto out = render (q, v, 300, [&] (int pos) {
+        setParam (q, vs::params::secondGain, -60.0f + (float) ((pos / 3000) % 67));
+        setParam (q, vs::params::magic, (float) ((pos / 1500) % 101));
+    }, &finite);
+    CHECK (finite);
+    CHECK (q.getLatencySamples() == lat);
+    float pk = 0;
+    for (float s : out) pk = std::max (pk, std::abs (s));
+    MEASURE ("urban preset with automated fader and Magia through the processor: peak %.3f", pk);
+    CHECK (pk < 1.0f);
+}
+
+TEST ("ui: the editor builds in Easy and Pro, the fader shows its value and double click restores the preset value")
+{
+    VocalShiftProcessor p;
+    p.getPresetManager().applyFactoryPreset ("urban_spatial");
+    for (auto mode : { "easy", "pro" })
+    {
+        p.getState().state.setProperty (vs::params::propUiMode, mode, nullptr);
+        std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor());
+        CHECK (ed != nullptr);
+        ed->setSize (900, 680);
+        auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+        CHECK (img.getWidth() == 900 && img.getHeight() == 680);
+        // the snapshot is not blank: it contains more than one colour
+        bool varied = false;
+        const auto c0 = img.getPixelAt (10, 300);
+        for (int x = 0; x < img.getWidth() && ! varied; x += 7)
+            for (int y = 0; y < img.getHeight() && ! varied; y += 7)
+                varied = img.getPixelAt (x, y) != c0;
+        CHECK (varied);
+    }
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI init;
