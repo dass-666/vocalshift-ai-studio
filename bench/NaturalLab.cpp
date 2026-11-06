@@ -9,6 +9,7 @@
 // Igualación de nivel: UNA sola ganancia por archivo (RMS global igual al de la entrada), nunca por regiones.
 
 #include <core/VocalChain.h>
+#include <core/dsp/HybridPitchShifter.h>
 #include <core/analysis/PitchDetector.h>
 #include "../tests/Signals.h"
 
@@ -25,6 +26,11 @@ using Sig = std::vector<float>;
 namespace
 {
 constexpr double kRate = 48000.0;
+#ifndef VS_GIT_COMMIT
+#define VS_GIT_COMMIT "unknown"
+#endif
+const char* const kEngineNames[3] = { "Fase 4 (Signalsmith)", "PSOLA experimental", "Hibrido experimental" };
+
 
 // Vocal + fricativa sintética ("a" - "sh" - "a") para vigilar consonantes.
 Sig makeTake (double f0)
@@ -41,26 +47,26 @@ Sig makeTake (double f0)
     return x;
 }
 
-Sig render (const Sig& in, int engine, float st, double& cpuPct, int& latency, int& activeEngine)
+Sig render (const Sig& in, int engine, float st, double& cpuPct, int& latency, int& activeEngine, int block = 512, bool trim = true)
 {
     vs::EngineSettings e;
     e.semitones = st; e.formantPreservation = 1.0f; e.magic01 = 0.0f; e.autoLevel = false; e.safetyClip = false;
-    e.pitchEngine = engine;
-    vs::VocalChain chain;
+    e.pitchEngine = engine == 1 ? 1 : 0;
+    vs::VocalChain chain (engine == 2 ? std::unique_ptr<vs::IPitchShifter> (std::make_unique<vs::HybridPitchShifter>()) : nullptr);
     chain.setEngineSettings (e, false);
-    chain.prepare (kRate, 1, 512);
+    chain.prepare (kRate, 1, block);
     latency = chain.latencySamples();
-    activeEngine = chain.activeEngineIndex();
+    activeEngine = engine == 2 ? 2 : chain.activeEngineIndex();
     Sig x = in;
     x.resize (in.size() + (size_t) latency, 0.0f);
     const auto t0 = std::chrono::steady_clock::now();
-    for (size_t p = 0; p < x.size(); p += 512)
+    for (size_t p = 0; p < x.size(); p += (size_t) block)
     {
         float* ptr = x.data() + p;
-        chain.process (&ptr, 1, (int) std::min<size_t> (512, x.size() - p));
+        chain.process (&ptr, 1, (int) std::min<size_t> ((size_t) block, x.size() - p));
     }
     cpuPct = 100.0 * std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count() / (x.size() / kRate);
-    return Sig (x.begin() + latency, x.end());
+    return trim ? Sig (x.begin() + latency, x.end()) : x;
 }
 
 double rms (const Sig& x, size_t a, size_t b)
@@ -128,6 +134,137 @@ Sig matchedTo (Sig x, const Sig& ref) // una sola ganancia global
     return x;
 }
 
+// ---- Auditoría ampliada (Fase 5.1) ---------------------------------------------------------------
+struct Cont { int octaveJumps = 0; double maxJumpCents = 0; int voiced = 0; };
+
+Cont continuity (const Sig& x, size_t a, size_t b)
+{
+    vs::YinPitchDetector yin (kRate, 50.0f, 1500.0f);
+    Cont c;
+    double prev = 0;
+    for (size_t p = a; p + 2048 <= b; p += 512)
+    {
+        const auto e = yin.analyse (x.data() + p, 2048);
+        if (e.frequencyHz <= 0) { prev = 0; continue; }
+        ++c.voiced;
+        if (prev > 0)
+        {
+            const double d = std::abs (1200.0 * std::log2 (e.frequencyHz / prev));
+            if (d >= 500.0) ++c.octaveJumps;
+            c.maxJumpCents = std::max (c.maxJumpCents, d);
+        }
+        prev = e.frequencyHz;
+    }
+    return c;
+}
+
+double db (double a, double b) { return 20.0 * std::log10 (std::max (1e-9, a) / std::max (1e-9, b)); }
+
+// Transitorios: ráfagas tipo "t" (8 ms de ruido decreciente) sobre silencio.
+Sig makeBursts()
+{
+    Sig x ((size_t) (2.5 * kRate), 0.0f);
+    auto n = vstest::whiteNoise (400, 0.8f, 11);
+    for (int k = 0; k < 4; ++k)
+        for (size_t i = 0; i < n.size(); ++i)
+            x[(size_t) ((0.4 + 0.5 * k) * kRate) + i] = n[i] * std::exp (-(float) i / 100.0f);
+    return x;
+}
+
+String auditSections (const Sig& take, bool synthetic)
+{
+    String md;
+    const float st = 7.0f;
+    // 1) Octavas y continuidad de F0 (toda la toma)
+    md << String::fromUTF8 ("\n## Saltos de octava y continuidad de F0 (+7 st)\n\n| Motor | Cuadros con voz | Saltos ≥ 500 cents | Mayor salto entre cuadros (cents) |\n|---|---|---|---|\n");
+    Sig outs[3];
+    for (int e = 0; e < 3; ++e)
+    {
+        double cpu; int lat, act;
+        outs[e] = render (take, e, st, cpu, lat, act);
+        const auto c = continuity (outs[e], 12000, outs[e].size());
+        md << "| " << kEngineNames[e] << " | " << c.voiced << " | " << c.octaveJumps << " | " << String (c.maxJumpCents, 0) << " |\n";
+    }
+    const auto cin = continuity (take, 12000, take.size());
+    md << "| (entrada) | " << cin.voiced << " | " << cin.octaveJumps << " | " << String (cin.maxJumpCents, 0) << " |\n";
+
+    // 2) Energía por regiones (solo toma sintética: se conocen las regiones)
+    if (synthetic)
+    {
+        md << String::fromUTF8 ("\n## Energía por regiones, salida/entrada (dB, +7 st, sin igualar nivel)\n\n| Motor | Vocal 1 | Fricativa | Transición (±20 ms) | Vocal 2 |\n|---|---|---|---|---|\n");
+        auto reg = [&] (const Sig& y, double t0, double t1) { return db (rms (y, (size_t) (t0 * kRate), (size_t) (t1 * kRate)), rms (take, (size_t) (t0 * kRate), (size_t) (t1 * kRate))); };
+        for (int e = 0; e < 3; ++e)
+        {
+            const double trans = 0.5 * (reg (outs[e], 1.48, 1.52) + reg (outs[e], 1.73, 1.77));
+            md << "| " << kEngineNames[e] << " | " << String (reg (outs[e], 0.3, 1.4), 1) << " | " << String (reg (outs[e], 1.55, 1.7), 1) << " | " << String (trans, 1)
+               << " | " << String (reg (outs[e], 1.9, 2.9), 1) << " |\n";
+        }
+    }
+
+    // 3) Transitorios
+    md << String::fromUTF8 ("\n## Transitorios (ráfagas de ruido de 8 ms, +7 st)\n\n| Motor | Pico salida/entrada (dB) | Energía previa a la ráfaga (dB re ráfaga) | Duración a −20 dB (ms) |\n|---|---|---|---|\n");
+    const Sig bursts = makeBursts();
+    for (int e = 0; e < 3; ++e)
+    {
+        double cpu; int lat, act;
+        const Sig y = render (bursts, e, st, cpu, lat, act);
+        double pkIn = 0, pkOut = 0;
+        for (size_t i = (size_t) (0.4 * kRate); i < (size_t) (0.5 * kRate); ++i) { pkIn = std::max (pkIn, (double) std::abs (bursts[i])); pkOut = std::max (pkOut, (double) std::abs (y[i])); }
+        const size_t on = (size_t) (0.4 * kRate);
+        const double pre = db (rms (y, on - (size_t) (0.02 * kRate), on), rms (y, on, on + 400));
+        size_t last = on;
+        for (size_t i = on; i < on + (size_t) (0.1 * kRate); ++i) if (std::abs (y[i]) > pkOut * 0.1) last = i;
+        md << "| " << kEngineNames[e] << " | " << String (db (pkOut, pkIn), 1) << " | " << String (pre, 1) << " | " << String (1000.0 * (last - on) / kRate, 1) << " |\n";
+    }
+
+    // 4) Vibrato (extensión en cents, entrada vs salida)
+    md << String::fromUTF8 ("\n## Vibrato conservado (primera vocal)\n\n| Motor | Extensión entrada (cents) | Extensión salida (cents) | Razón |\n|---|---|---|---|\n");
+    for (int e = 0; e < 3; ++e)
+    {
+        const auto m = measure (take, outs[e], st);
+        auto tin = f0TrackCents (take, 12000, (size_t) (1.45 * kRate));
+        std::sort (tin.begin(), tin.end());
+        const double ext = tin.size() > 4 ? 0.5 * (tin[(size_t) (0.95 * (tin.size() - 1))] - tin[(size_t) (0.05 * (tin.size() - 1))]) : 0.0;
+        md << "| " << kEngineNames[e] << " | " << String (ext, 1) << " | " << String (ext * m.vibratoRatio, 1) << " | " << String (m.vibratoRatio, 2) << " |\n";
+    }
+
+    // 5) Latencia medida vs informada (impulso)
+    md << String::fromUTF8 ("\n## Latencia (impulso a 0 st, retardo medido del pico)\n\n| Motor | Informada (muestras) | Medida (muestras) |\n|---|---|---|\n");
+    for (int e = 0; e < 3; ++e)
+    {
+        Sig imp ((size_t) (1.0 * kRate), 0.0f);
+        const auto burst = vstest::vowel (kRate, 200.0, 0.05, 0.5f, 0.0, 0.0);
+        std::copy (burst.begin(), burst.end(), imp.begin() + 4800);
+        double cpu; int lat, act;
+        const Sig raw = render (imp, e, 0.0f, cpu, lat, act, 512, false);
+        // retardo = correlación cruzada por el máximo en una ventana ±3000 muestras alrededor de lat
+        double best = -1e30; int bestLag = 0;
+        for (int L = lat - 3000; L <= lat + 3000; L += 1)
+        {
+            double sdot = 0;
+            for (size_t i = 0; i < burst.size(); ++i) { const size_t j = 4800 + i + (size_t) L; if (j < raw.size()) sdot += (double) raw[j] * burst[i]; }
+            if (sdot > best) { best = sdot; bestLag = L; }
+        }
+        md << "| " << kEngineNames[e] << " | " << lat << " | " << bestLag << " |\n";
+    }
+
+    // 6) Tamaño de búfer: diferencia respecto al bloque de 512
+    md << String::fromUTF8 ("\n## Diferencia entre tamaños de búfer (+7 st; referencia = bloque 512)\n\n| Motor | Bloque | Diferencia máx. | Diferencia RMS (dB re señal) |\n|---|---|---|---|\n");
+    for (int e = 0; e < 3; ++e)
+    {
+        double cpu; int lat, act;
+        const Sig ref = render (take, e, st, cpu, lat, act, 512);
+        for (int blk : { 64, 480, 1024 })
+        {
+            const Sig y = render (take, e, st, cpu, lat, act, blk);
+            double mx = 0, ds = 0;
+            for (size_t i = 0; i < y.size() && i < ref.size(); ++i) { const double d = y[i] - ref[i]; mx = std::max (mx, std::abs (d)); ds += d * d; }
+            md << "| " << kEngineNames[e] << " | " << blk << " | " << String (mx, 6) << " | " << String (db (std::sqrt (ds / y.size()), rms (ref, 0, ref.size())), 1) << " |\n";
+        }
+    }
+    return md;
+}
+
 // Perfil de CPU (% de tiempo real en un núcleo), memoria y latencia por configuración.
 int runPerf (const File& out)
 {
@@ -190,45 +327,55 @@ int main (int argc, char** argv)
         take.assign (b.getReadPointer (0), b.getReadPointer (0) + b.getNumSamples());
     }
 
-    String md = String::fromUTF8 ("# NaturalLab: Fase 4 (Signalsmith) vs PSOLA experimental\n\nFuente: ")
-              + (args.contains ("--input") ? String ("archivo del usuario") : String::fromUTF8 ("vocal+fricativa sintética (no es una voz humana)"))
-              + String::fromUTF8 (". Pitch puro: Carácter 0, Magia 0, nivel auto apagado. Sin veredictos perceptuales.\n\n"
+    const String commit (VS_GIT_COMMIT);
+    const uint32_t seed = (uint32_t) arg ("--seed", "42").getIntValue();
+    const bool synthetic = ! args.contains ("--input");
+    String md = String::fromUTF8 ("# NaturalLab: Fase 4 vs PSOLA experimental vs híbrido experimental\n\nCommit: ") + commit + ", semilla " + String ((int) seed)
+              + String::fromUTF8 ("\n\nFuente: ")
+              + (synthetic ? String::fromUTF8 ("vocal+fricativa sintética (no es una voz humana)") : String ("archivo del usuario"))
+              + String::fromUTF8 (". Pitch puro: Carácter 0, Magia 0, nivel auto apagado. Sin veredictos perceptuales; las métricas sintéticas no deciden qué motor es mejor.\n\n"
                 "| Motor | st | Error F0 (cents) | Jitter (cents) | Vibrato conservado | Centroide × | Nivel vocal (dB) | Consonante (dB) | Pico | Dif. duración (ms) | CPU % | Latencia |\n"
                 "|---|---|---|---|---|---|---|---|---|---|---|---|\n");
-    String manifest = String::fromUTF8 ("# MANIFEST\n\nA = Fase 4 (Signalsmith Stretch 1.3.2, motor por defecto). B = PSOLA experimental. Misma entrada, mismos parámetros, misma latencia.\nNivel: una ganancia global por archivo hasta igualar el RMS de la entrada.\n\n| Caso | Archivo A | Archivo B | Latencia A/B | Parámetros |\n|---|---|---|---|---|\n");
-    String key = String::fromUTF8 ("# CLAVE ciega (no abrir antes de escuchar)\n\n| Archivo | Motor |\n|---|---|\n");
-    struct Blind { String name, engine; };
+    String manifest = String::fromUTF8 ("# MANIFEST\n\nA = Fase 4 (Signalsmith Stretch 1.3.2, motor por defecto). B = PSOLA experimental. C = híbrido experimental (aislado, no está en el VST3). Misma entrada, mismos parámetros, misma latencia.\nNivel: una ganancia global por archivo hasta igualar el RMS de la entrada.\n")
+                      + "Commit: " + commit + ", semilla: " + String ((int) seed) + "\n\n| Caso | Archivo | Algoritmo | Latencia | Parámetros |\n|---|---|---|---|---|\n";
+    String key = String::fromUTF8 ("# CLAVE ciega (no abrir antes de escuchar)\n\nCommit: ") + commit + ", semilla: " + String ((int) seed) + "\n\n| Archivo | Caso | Algoritmo |\n|---|---|---|\n";
+    struct Blind { String name, label, engine; };
     std::vector<Blind> blind;
+    const char* const tags[3] = { "A_fase4", "B_psola", "C_hibrido" };
 
     for (float st : { 3.f, 7.f, 12.f, 19.f, -5.f, -12.f })
     {
-        Sig outs[2];
-        for (int e = 0; e < 2; ++e)
+        Sig outs[3];
+        const String label = "pitch_" + String (st > 0 ? "+" : "") + String ((int) st) + "st";
+        for (int e = 0; e < 3; ++e)
         {
             double cpu = 0; int lat = 0, act = 0;
             outs[e] = render (take, e, st, cpu, lat, act);
             if (act != e) { std::printf ("Motor %d no disponible\n", e); return 2; }
             const auto m = measure (take, outs[e], st);
-            md << "| " << (e ? "PSOLA exp." : "Fase 4") << " | " << String (st, 0) << " | " << String (m.f0Err, 1) << " | " << String (m.jitterCents, 1)
+            md << "| " << kEngineNames[e] << " | " << String (st, 0) << " | " << String (m.f0Err, 1) << " | " << String (m.jitterCents, 1)
                << " | " << String (m.vibratoRatio, 2) << " | " << String (m.centroidRatio, 2) << " | " << String (m.levelLossDb, 1) << " | "
                << String (m.consonantRatio, 1) << " | " << String (m.peak, 2) << " | " << String (m.durationDiffMs, 1) << " | " << String (cpu, 2) << " | " << lat << " |\n";
             outs[e] = matchedTo (outs[e], take);
+            const String file = label + "__" + tags[e] + ".wav";
+            writeWav (out.getChildFile ("ab/" + file), outs[e]);
+            manifest << "| " << label << " | " << file << " | " << kEngineNames[e] << " | " << lat << " | semitones=" << String (st, 0) << String::fromUTF8 (", preservación 100 %, Magia 0 |\n");
+            out.getChildFile ("ab/" + file + ".json").replaceWithText ("{ \"algorithm\": \"" + String (kEngineNames[e]) + "\", \"commit\": \"" + commit + "\", \"semitones\": " + String (st, 1)
+                + ", \"latency_samples\": " + String (lat) + ", \"rate\": 48000, \"source\": \"" + (synthetic ? "synthetic" : "user") + "\" }\n");
         }
-        const String label = "pitch_" + String (st > 0 ? "+" : "") + String ((int) st) + "st";
-        writeWav (out.getChildFile ("ab/" + label + "__A_fase4.wav"), outs[0]);
-        writeWav (out.getChildFile ("ab/" + label + "__B_psola.wav"), outs[1]);
-        manifest << "| " << label << " | " << label << "__A_fase4.wav | " << label << "__B_psola.wav | 7200/7200 | semitones=" << String (st, 0) << ", preservación 100 %, Magia 0 |\n";
-        for (int e = 0; e < 2; ++e)
+        for (int e = 0; e < 3; ++e)
         {
             char hex[16]; std::snprintf (hex, sizeof hex, "%08x", (unsigned) rng());
             writeWav (out.getChildFile (String ("blind/") + String (hex) + ".wav"), outs[e]);
-            blind.push_back ({ String (hex) + ".wav", label + (e ? " · PSOLA experimental" : " · Fase 4") });
+            blind.push_back ({ String (hex) + ".wav", label, kEngineNames[e] });
         }
     }
     std::shuffle (blind.begin(), blind.end(), rng);
-    for (auto& b : blind) key << "| " << b.name << " | " << b.engine << " |\n";
+    for (auto& b : blind) key << "| " << b.name << " | " << b.label << " | " << b.engine << " |\n";
     writeWav (out.getChildFile ("ab/00_original.wav"), take);
-    out.getChildFile ("METRICS.md").replaceWithText (md + String::fromUTF8 ("\nNota: Error F0, jitter y vibrato vienen de YIN sobre la primera vocal; 'Consonante' es la variación de RMS en la fricativa (0 = intacta). Ninguna métrica mide naturalidad.\n"));
+    md << String::fromUTF8 ("\nNota: Error F0, jitter y vibrato vienen de YIN sobre la primera vocal; 'Consonante' es la variación de RMS en la fricativa (0 = intacta). Ninguna métrica mide naturalidad.\n");
+    md << auditSections (take, synthetic);
+    out.getChildFile ("METRICS.md").replaceWithText (md);
     out.getChildFile ("MANIFEST.md").replaceWithText (manifest);
     out.getChildFile ("blind_KEY.md").replaceWithText (key);
     std::printf ("%s\n", md.toRawUTF8());
