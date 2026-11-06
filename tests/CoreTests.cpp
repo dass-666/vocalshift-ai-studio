@@ -7,6 +7,7 @@
 #include <core/VocalChain.h>
 #include <core/analysis/PitchDetector.h>
 #include <core/dsp/SignalsmithPitchShifter.h>
+#include <core/dsp/HybridPitchShifter.h>
 #include <core/mix/VocalMixEngine.h>
 #include <core/mix/LevelMatcher.h>
 #include <core/dsp/DeEsser.h>
@@ -1860,6 +1861,228 @@ TEST ("spatial 2.0: a host tempo change glides the slap time instead of jumping 
     }
     MEASURE ("slap tempo 120 -> 80 BPM: max sample step %.4f (steady state before: %.4f)", maxStep, maxStepBefore);
     CHECK (maxStep < 1.6f * maxStepBefore);
+}
+
+// ---------------------------------------------------------------------------
+// Fase 5.1: PSOLA audit regressions and the isolated hybrid prototype
+namespace
+{
+Signal runEngine (vs::IPitchShifter& e, const Signal& x, float st, int block, float formantShift = 0.0f)
+{
+    vs::PitchSettings ps;
+    ps.semitones = st; ps.formantPreservation = 1.0f; ps.formantShiftSemitones = formantShift;
+    e.setSettings (ps);
+    Signal in = x;
+    in.resize (x.size() + (size_t) e.latencySamples(), 0.0f);
+    Signal y (in.size());
+    for (size_t p = 0; p < in.size(); p += (size_t) block)
+    {
+        const int n = (int) std::min<size_t> ((size_t) block, in.size() - p);
+        const float* ip = in.data() + p; float* op = y.data() + p;
+        e.process (&ip, &op, n);
+    }
+    return Signal (y.begin() + e.latencySamples(), y.end());
+}
+float maxStep (const Signal& x, size_t from = 1)
+{
+    float m = 0.0f;
+    for (size_t i = std::max<size_t> (from, 1); i < x.size(); ++i) m = std::max (m, std::abs (x[i] - x[i - 1]));
+    return m;
+}
+Signal vowelNoiseVowel (double fs)
+{
+    Signal x;
+    for (int k = 0; k < 4; ++k)
+    {
+        auto v = vowel (fs, 180.0 + 10.0 * k, 0.6, 0.25f, 5.0, 30.0);
+        auto n = whiteNoise (7200, 0.1f, (uint32_t) k + 1);
+        for (size_t i = n.size() - 1; i > 0; --i) n[i] -= 0.9f * n[i - 1];
+        x.insert (x.end(), v.begin(), v.end());
+        x.insert (x.end(), n.begin(), n.end());
+    }
+    return x;
+}
+}
+
+TEST ("psola audit: input F0 80-690 Hz is shifted (range was 450 Hz); no octave errors")
+{
+    const double fs = 48000;
+    vs::YinPitchDetector yin (fs, 40.0f, 2000.0f);
+    for (double f : { 80.0, 100.0, 150.0, 220.0, 330.0, 440.0, 520.0, 620.0, 690.0 })
+    {
+        auto x = vowel (fs, f, 2.0, 0.3f, 0.0, 0.0);
+        vs::PsolaPitchShifter e;
+        e.setLatencyTarget (7200);
+        e.prepare (fs, 1, 480);
+        auto y = runEngine (e, x, 7.0f, 480);
+        auto mi = segment (x, 30000, 50000), mo = segment (y, 30000, 50000);
+        const double err = centsBetween (yin.medianF0 (mi.data(), 50000) * std::pow (2.0, 7.0 / 12.0), yin.medianF0 (mo.data(), 50000));
+        MEASURE ("steady %.0f Hz, +7 st: error %+.2f cents", f, err);
+        CHECK_MSG (std::abs (err) < 10.0, "f0=%.0f err=%.2f", f, err);
+    }
+}
+
+TEST ("psola audit: voice/consonant transitions, hard automation and wide vibrato produce no extra discontinuities")
+{
+    const double fs = 48000;
+    const auto x = vowelNoiseVowel (fs);
+    const float inStep = maxStep (x);
+    for (float st : { -7.f, 7.f, 12.f })
+    {
+        vs::PsolaPitchShifter e;
+        e.setLatencyTarget (7200);
+        e.prepare (fs, 1, 480);
+        auto y = runEngine (e, x, st, 480);
+        const float r = maxStep (y) / inStep;
+        MEASURE ("transitions %+.0f st: max step out/in = %.2f", st, r);
+        CHECK_MSG (r < 1.15f, "ratio %.2f", r);
+    }
+    {   // semitones jump +-9 every 100 ms
+        auto v = vowel (fs, 200.0, 3.0, 0.3f, 5.0, 20.0);
+        vs::PsolaPitchShifter e;
+        e.setLatencyTarget (7200);
+        e.prepare (fs, 1, 480);
+        Signal in = v; in.resize (v.size() + 7200, 0.0f);
+        Signal y (in.size());
+        for (size_t p = 0; p + 480 <= in.size(); p += 480)
+        {
+            vs::PitchSettings ps; ps.semitones = ((p / 4800) % 2) ? 9.0f : -9.0f;
+            e.setSettings (ps);
+            const float* ip = in.data() + p; float* op = y.data() + p;
+            e.process (&ip, &op, 480);
+        }
+        const float r = maxStep (y, 8000) / maxStep (v);
+        MEASURE ("hard automation +-9 st every 100 ms: max step out/in = %.2f", r);
+        CHECK (allFinite (y) && r < 1.15f);
+    }
+    {   // 100-cent vibrato at 7 Hz must be followed
+        auto v = vowel (fs, 200.0, 3.0, 0.3f, 7.0, 100.0);
+        vs::PsolaPitchShifter e;
+        e.setLatencyTarget (7200);
+        e.prepare (fs, 1, 480);
+        auto y = runEngine (e, v, 7.0f, 480);
+        vs::YinPitchDetector yin (fs, 40.0f, 1500.0f);
+        int bad = 0, total = 0;
+        for (int p = 12000; p + 2048 <= (int) v.size() - 12000; p += 512)
+        {
+            const auto a = yin.analyse (v.data() + p, 2048), b = yin.analyse (y.data() + p, 2048);
+            if (a.frequencyHz <= 0) continue;
+            ++total;
+            if (b.frequencyHz <= 0 || std::abs (std::log2 (b.frequencyHz / (a.frequencyHz * std::pow (2.0f, 7.0f / 12.0f)))) > 0.05) ++bad;
+        }
+        MEASURE ("wide vibrato (100 cents, 7 Hz): %d / %d frames off by more than 60 cents", bad, total);
+        CHECK (bad * 20 <= total);
+    }
+}
+
+TEST ("hybrid (isolated prototype): same latency, PSOLA only in stable voiced regions, no extra discontinuities, block-size independent")
+{
+    const double fs = 48000;
+    const auto x = vowelNoiseVowel (fs);
+    vs::SignalsmithPitchShifter ref;
+    ref.prepare (fs, 1, 480);
+    for (float st : { -5.f, 7.f, 12.f })
+    {
+        vs::HybridPitchShifter h;
+        h.prepare (fs, 1, 480);
+        CHECK (h.latencySamples() == ref.latencySamples());
+        auto y = runEngine (h, x, st, 480);
+        vs::SignalsmithPitchShifter r2;
+        r2.prepare (fs, 1, 480);
+        auto yr = runEngine (r2, x, st, 480);
+        MEASURE ("hybrid %+.0f st: PSOLA share %.2f, switches %ld, max step %.3f (Signalsmith alone %.3f, input %.3f)",
+                 st, h.psolaShare(), h.switchCount(), maxStep (y), maxStep (yr), maxStep (x));
+        CHECK (h.psolaShare() > 0.3f && h.psolaShare() < 0.95f);
+        CHECK (h.switchCount() <= 12);   // 4 vowels, enter + exit each; no flapping
+        CHECK (maxStep (y) <= 1.1f * std::max (maxStep (yr), maxStep (x)));
+        CHECK (allFinite (y));
+    }
+    // block-size independence
+    vs::HybridPitchShifter a, b;
+    a.prepare (fs, 1, 1024); b.prepare (fs, 1, 1024);
+    auto ya = runEngine (a, x, 7.0f, 480), yb = runEngine (b, x, 7.0f, 1000);
+    double d = 0;
+    for (size_t i = 0; i < ya.size(); ++i) d = std::max (d, (double) std::abs (ya[i] - yb[i]));
+    MEASURE ("hybrid: max difference between block sizes 480 and 1000 = %.2e", d);
+    CHECK (d < 1e-3);
+    // silence stays silent
+    vs::HybridPitchShifter z;
+    z.prepare (fs, 1, 480);
+    Signal zero (48000, 0.0f);
+    auto yz = runEngine (z, zero, 7.0f, 480);
+    CHECK (std::all_of (yz.begin(), yz.end(), [] (float v) { return std::abs (v) < 1e-7f; }));
+    // runs inside the whole chain (NaN guard, level, mixer) when injected; allocation-free in process()
+    vs::VocalChain chain (std::make_unique<vs::HybridPitchShifter>());
+    chain.setEngineSettings (pitchParams (7.0f, 100.0f), false);
+    chain.prepare (fs, 1, 480);
+    CHECK (chain.latencySamples() == ref.latencySamples());
+    Signal buf = x;
+    g_allocCount = 0;
+    g_trackAllocs = true;
+    for (size_t p = 0; p + 480 <= buf.size(); p += 480) { float* ptr = buf.data() + p; chain.process (&ptr, 1, 480); }
+    g_trackAllocs = false;
+    MEASURE ("hybrid inside VocalChain: allocations = %ld", g_allocCount.load());
+    CHECK (g_allocCount.load() == 0 && allFinite (buf));
+}
+
+TEST ("hybrid + psola audit: blend regions do not cancel badly; PSOLA timing offset stays within half a period")
+{
+    const double fs = 48000;
+    const auto x = vowelNoiseVowel (fs);
+    // Hybrid blended against Signalsmith in 10 ms windows where the weight is between 0 and 1.
+    {
+        vs::HybridPitchShifter h; vs::SignalsmithPitchShifter r;
+        h.prepare (fs, 1, 48); r.prepare (fs, 1, 48);
+        vs::PitchSettings ps; ps.semitones = 7.0f;
+        h.setSettings (ps); r.setSettings (ps);
+        Signal in = x; in.resize (x.size() + 7200, 0.0f);
+        Signal y (in.size()), yr (in.size());
+        std::vector<float> w;
+        for (size_t p = 0; p + 48 <= in.size(); p += 48)
+        {
+            const float* ip = in.data() + p; float* o1 = y.data() + p; float* o2 = yr.data() + p;
+            h.process (&ip, &o1, 48); r.process (&ip, &o2, 48);
+            w.push_back (h.lastWeight());
+        }
+        double worst = 99.0; int windows = 0;
+        for (size_t b = 0; b + 10 < w.size(); b += 10)
+            if (w[b + 5] > 0.01f && w[b + 5] < 0.99f)
+            {
+                double a = 0, c = 0;
+                for (int j = 0; j < 480; ++j) { a += y[b * 48 + j] * y[b * 48 + j]; c += yr[b * 48 + j] * yr[b * 48 + j]; }
+                if (c > 1e-6) { ++windows; worst = std::min (worst, 10.0 * std::log10 (a / c)); }
+            }
+        MEASURE ("hybrid blend: %d windows of 10 ms, worst energy vs Signalsmith = %.1f dB (partial phase cancellation)", windows, worst);
+        CHECK (windows > 0 && worst > -8.0);
+    }
+    // PSOLA: measured delay of a vowel burst at 0 st vs the reported latency.
+    for (double f0 : { 110.0, 200.0, 300.0 })
+    {
+        Signal imp ((size_t) fs, 0.0f);
+        const auto burst = vowel (fs, f0, 0.05, 0.5f, 0.0, 0.0);
+        std::copy (burst.begin(), burst.end(), imp.begin() + 4800);
+        vs::PsolaPitchShifter e;
+        e.setLatencyTarget (7200);
+        e.prepare (fs, 1, 512);
+        vs::PitchSettings ps; e.setSettings (ps);
+        Signal in = imp; in.resize (imp.size() + 8000, 0.0f);
+        Signal y (in.size());
+        for (size_t p = 0; p < in.size(); p += 512)
+        {
+            const int n = (int) std::min<size_t> (512, in.size() - p);
+            const float* ip = in.data() + p; float* op = y.data() + p;
+            e.process (&ip, &op, n);
+        }
+        double best = -1e30; int bestLag = 0;
+        for (int L = 7200 - 1000; L <= 7200 + 1000; ++L)
+        {
+            double d = 0;
+            for (size_t i = 0; i < burst.size(); ++i) d += (double) y[4800 + i + (size_t) L] * burst[i];
+            if (d > best) { best = d; bestLag = L; }
+        }
+        MEASURE ("PSOLA f0=%.0f Hz: measured delay %d, reported 7200 (offset %+d samples, half period %.0f)", f0, bestLag, bestLag - 7200, fs / f0 / 2);
+        CHECK (std::abs (bestLag - 7200) <= (int) (fs / f0 / 2) + 2);
+    }
 }
 
 

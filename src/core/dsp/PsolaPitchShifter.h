@@ -8,7 +8,7 @@ namespace vs
 {
 
 // EXPERIMENTAL pitch/formant engine (Fase 5): time-domain PSOLA.
-//   - YIN F0 tracker on a decimated mono mix (5 ms hop), refined at full rate.
+//   - YIN F0 tracker on a decimated mono mix (5 ms hop), refined at full rate; input range 65-700 Hz.
 //   - Voiced regions: pitch-synchronous Hann grains (peak-anchored) re-spaced by 1/ratio.
 //     Formants stay where they were (the grain keeps its spectral envelope); a formant
 //     shift resamples each grain.
@@ -31,6 +31,10 @@ public:
     int latencySamples() const override { return latency; }
     const char* engineName() const override { return "PSOLA experimental (Fase 5)"; }
 
+    // Reliability of the pitch analysis behind each output sample of the LAST process() call, 0..1
+    // (0 = unvoiced or unreliable, 1 = clearly periodic and stable). Used by the hybrid engine.
+    const float* lastConfidence() const { return confOut.data(); }
+
     // Diagnostics: fraction of placed grains that were voiced since reset.
     float voicedFraction() const { return placed > 0 ? (float) voicedPlaced / (float) placed : 0.0f; }
 
@@ -38,10 +42,11 @@ private:
     float monoAt (long long i) const;
     void computeHop (long long h);
     bool detectLag (double& tauD, float& conf);
-    void lookup (double ta, bool& voiced, double& t0) const;
+    void lookup (double ta, bool& voiced, double& t0, float* conf = nullptr) const;
     int peakNear (double ta, double t0) const;
     void placeMark();
 
+    static constexpr double maxF0Hz = 700.0; // Fase 5.1: was 450 Hz; higher input pitches were passed through unshifted
     double fs = 48000.0;
     int channels = 1, latency = 0, latencyTarget = 0, minLatency = 0;
     int decim = 4, winFull = 2048, winD = 512, lagMinD = 26, lagMaxD = 185, hop = 240, lookahead = 1500;
@@ -55,7 +60,7 @@ private:
     double tS = 0.0;
 
     static constexpr int trackCap = 1024;
-    std::vector<float> trackT0;
+    std::vector<float> trackT0, trackConf, confAcc, confOut;
     std::vector<unsigned char> trackVoiced;
 
     double ratio = 1.0, formantRatio = 1.0;
