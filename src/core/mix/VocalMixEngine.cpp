@@ -42,7 +42,7 @@ void VocalMixEngine::setRouting (bool secondVoice, float mix01, float secondGain
     if (secondVoice)
     {
         dryGainSmoother.setTarget (1.0f);
-        wetGainSmoother.setTarget (std::pow (10.0f, secondGainDb / 20.0f));
+        wetGainSmoother.setTarget (secondGainDb <= faderSilenceDb ? 0.0f : std::pow (10.0f, secondGainDb / 20.0f));
         panSmoother.setTarget (pan01);
         wetDelayTarget = (float) (std::clamp (offsetMs, 0.0f, maxOffsetMs) * 0.001 * fs);
     }

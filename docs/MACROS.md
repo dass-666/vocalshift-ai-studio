@@ -152,3 +152,11 @@ entrada ─┬─ retardo de latencia (solo retardo, 0 dB, sin filtros) ──�
   (solo en Transformar), ganancia de salida, DSP mejorado. La humanización queda fuera de este bloque (no se ofrece ningún control).
 - Protección: la suma original (0 dB) + segunda voz (−9 dB) puede subir hasta ~+2.5 dB; el soft clip es la última red.
   Con el original a −6 dBFS no se alteró ninguna muestra (contador `clipAlteredSamples`, probado a +7, +12 y +19 st), así que el limitador no oculta errores de ganancia.
+
+---
+
+# Fase 4: Magia y Carácter en Segunda voz
+
+Magia pasa a controlar el espacio (anchura, reverb, eco corto, modulación) y Carácter añade cuerpo, presencia y calidez cuando `Ruta = Segunda voz`,
+`DSP mejorado` y `Procesamiento espacial` están activos. Fórmulas, valores efectivos y límites: `FASE4_URBAN_SPATIAL.md`.
+Con el espacio apagado (o en Transformar) todo se comporta como en la Fase 3.

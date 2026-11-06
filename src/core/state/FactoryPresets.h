@@ -36,12 +36,18 @@ struct VoiceParams
     bool safetyClip = true;
     bool autoLevel = true;          // automatic loudness compensation of the processed signal
     // Second-voice route only
-    float secondGainDb = -9.0f;     // level of the processed voice relative to the original, [-30, 0] dB
+    float secondGainDb = -9.0f;     // fader: level of the processed voice (voice + space) re the original, [-60 (silence), +6] dB
     float pan = 0.0f;               // position of the second voice, [-100, 100] (stereo only)
     float offsetMs = 0.0f;          // artistic delay of the second voice, [0, 100] ms
     // Processing generation: true = revised DSP (consonant preservation, de-esser, revised
     // Character mapping, gated level matching). false = exact dec340d behaviour.
     bool improved = true;
+    // Phase 4 "Urban Spatial Engine" (second voice only, needs improved): Magia drives width / reverb / slap,
+    // Caracter adds body / presence / warmth. false = exact Phase 3 sound.
+    bool spatial = true;
+    float spaceWidth = 100.0f;      // Pro trims of what Magia asks for, [0, 100] %
+    float spaceReverb = 100.0f;
+    float spaceDelay = 100.0f;
 
     float totalSemitones() const;   // semitones + cents, clamped to [-24, 24]
 };

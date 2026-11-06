@@ -4,28 +4,149 @@ namespace vs
 {
 
 using namespace juce;
+namespace pal = palette;
 
 static String u8s (const char* s) { return String::fromUTF8 (s); }
-
-namespace colours
-{
-    const Colour bg { 0xff15171c };
-    const Colour panel { 0xff1e222a };
-    const Colour accent { 0xff3fc1c9 };
-    const Colour morph { 0xffc98a3f };
-    const Colour text { 0xffe6e8ec };
-    const Colour dim { 0xff8a90a0 };
-    const Colour clip { 0xffe5484d };
-}
 
 static constexpr int factoryIdOffset = 1;
 static constexpr int userIdOffset = 1000;
 
 // ---------------------------------------------------------------------------
+VsLookAndFeel::VsLookAndFeel()
+{
+    setColour (Slider::rotarySliderFillColourId, pal::blue);
+    setColour (Slider::textBoxOutlineColourId, Colours::transparentBlack);
+    setColour (Slider::textBoxTextColourId, pal::text);
+    setColour (Label::textColourId, pal::text);
+    setColour (ComboBox::backgroundColourId, pal::panelHi);
+    setColour (ComboBox::textColourId, pal::text);
+    setColour (ComboBox::outlineColourId, pal::groove);
+    setColour (PopupMenu::backgroundColourId, pal::panel);
+    setColour (PopupMenu::textColourId, pal::text);
+    setColour (PopupMenu::highlightedBackgroundColourId, pal::blue.darker (0.3f));
+    setColour (TextButton::buttonColourId, pal::panelHi);
+    setColour (TextButton::textColourOffId, pal::text);
+    setColour (TextButton::textColourOnId, pal::text);
+}
+
+Font VsLookAndFeel::getTextButtonFont (TextButton&, int height) { return FontOptions ((float) jmin (15, height - 8), Font::plain); }
+
+void VsLookAndFeel::drawButtonBackground (Graphics& g, Button& b, const Colour& colour, bool highlighted, bool down)
+{
+    auto r = b.getLocalBounds().toFloat().reduced (1.0f);
+    auto c = colour;
+    if (highlighted) c = c.brighter (0.08f);
+    if (down) c = c.darker (0.1f);
+    g.setColour (c);
+    g.fillRoundedRectangle (r, 7.0f);
+    g.setColour (pal::groove.withAlpha (0.8f));
+    g.drawRoundedRectangle (r, 7.0f, 1.0f);
+}
+
+void VsLookAndFeel::drawRotarySlider (Graphics& g, int x, int y, int w, int h, float pos, float startAngle, float endAngle, Slider& s)
+{
+    const auto bounds = Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
+    const float diameter = jmin (bounds.getWidth(), bounds.getHeight());
+    const auto area = bounds.withSizeKeepingCentre (diameter, diameter).reduced (diameter * 0.06f);
+    const auto centre = area.getCentre();
+    const float radius = area.getWidth() * 0.5f;
+    const float ring = jmax (3.0f, radius * 0.11f);
+    const auto colour = s.findColour (Slider::rotarySliderFillColourId);
+    const bool enabled = s.isEnabled();
+
+    // knob body: soft vertical gradient, subtle rim (depth without reflections)
+    const float bodyR = radius - ring * 1.9f;
+    g.setGradientFill (ColourGradient (pal::panelHi.brighter (0.05f), centre.x, centre.y - bodyR, pal::panel.darker (0.3f), centre.x, centre.y + bodyR, false));
+    g.fillEllipse (centre.x - bodyR, centre.y - bodyR, bodyR * 2, bodyR * 2);
+    g.setColour (Colours::black.withAlpha (0.55f));
+    g.drawEllipse (centre.x - bodyR, centre.y - bodyR, bodyR * 2, bodyR * 2, 1.2f);
+
+    // track + progress arc
+    const float arcR = radius - ring * 0.5f;
+    Path track;
+    track.addCentredArc (centre.x, centre.y, arcR, arcR, 0.0f, startAngle, endAngle, true);
+    g.setColour (pal::groove);
+    g.strokePath (track, PathStrokeType (ring, PathStrokeType::curved, PathStrokeType::rounded));
+    const float angle = startAngle + pos * (endAngle - startAngle);
+    Path value;
+    value.addCentredArc (centre.x, centre.y, arcR, arcR, 0.0f, startAngle, angle, true);
+    g.setColour (enabled ? colour : colour.withAlpha (0.25f));
+    g.strokePath (value, PathStrokeType (ring, PathStrokeType::curved, PathStrokeType::rounded));
+    if (enabled && s.isMouseOverOrDragging())
+    {
+        g.setColour (colour.withAlpha (0.18f));
+        g.strokePath (value, PathStrokeType (ring * 2.2f, PathStrokeType::curved, PathStrokeType::rounded));
+    }
+
+    // pointer
+    Path pointer;
+    const float pl = bodyR * 0.62f;
+    pointer.addRoundedRectangle (-1.8f, -bodyR + 4.0f, 3.6f, pl, 1.8f);
+    g.setColour (enabled ? pal::text : pal::dim);
+    g.fillPath (pointer, AffineTransform::rotation (angle).translated (centre.x, centre.y));
+}
+
+void VsLookAndFeel::drawLinearSlider (Graphics& g, int x, int y, int w, int h, float pos, float, float, Slider::SliderStyle style, Slider& s)
+{
+    if (style != Slider::LinearVertical)
+    {
+        LookAndFeel_V4::drawLinearSlider (g, x, y, w, h, pos, 0, 0, style, s);
+        return;
+    }
+    const auto colour = s.findColour (Slider::rotarySliderFillColourId);
+    const float cx = (float) x + (float) w * 0.5f;
+    const float grooveW = 8.0f;
+    const float top = (float) y + 6.0f, bottom = (float) (y + h) - 6.0f;
+    auto groove = Rectangle<float> (cx - grooveW * 0.5f, top, grooveW, bottom - top);
+
+    // dB scale: ticks drawn at fixed dB values converted through the slider's own mapping
+    g.setFont (FontOptions (10.5f));
+    for (double db : { 6.0, 0.0, -12.0, -24.0, -36.0, -60.0 })
+    {
+        const float p = (float) s.valueToProportionOfLength (db);
+        const float ty = bottom - p * (bottom - top);
+        const bool major = db == 0.0 || db == -12.0 || db == -60.0;
+        g.setColour (db == -12.0 ? colour.withAlpha (0.9f) : pal::dim.withAlpha (major ? 0.9f : 0.55f));
+        g.drawLine (cx + grooveW * 0.5f + 5.0f, ty, cx + grooveW * 0.5f + (major ? 14.0f : 10.0f), ty, 1.0f);
+        const String label = db <= -60.0 ? String::fromUTF8 ("−∞") : (db > 0 ? "+" : (db < 0 ? String::fromUTF8 ("−") : String())) + String ((int) std::abs (db));
+        g.drawText (label, Rectangle<float> (cx + grooveW * 0.5f + 16.0f, ty - 7.0f, 30.0f, 14.0f), Justification::centredLeft);
+    }
+
+    g.setColour (pal::groove);
+    g.fillRoundedRectangle (groove, grooveW * 0.5f);
+    auto filled = groove.withTop (pos);
+    const bool hot = s.getValue() > 0.0;
+    g.setGradientFill (ColourGradient (hot ? pal::amber : colour.brighter (0.2f), 0, filled.getY(), colour.darker (0.4f), 0, filled.getBottom(), false));
+    g.fillRoundedRectangle (filled, grooveW * 0.5f);
+
+    // handle
+    auto handle = Rectangle<float> (cx - 17.0f, pos - 9.0f, 34.0f, 18.0f);
+    g.setGradientFill (ColourGradient (pal::panelHi.brighter (0.25f), 0, handle.getY(), pal::panel, 0, handle.getBottom(), false));
+    g.fillRoundedRectangle (handle, 5.0f);
+    g.setColour (Colours::black.withAlpha (0.6f));
+    g.drawRoundedRectangle (handle, 5.0f, 1.2f);
+    g.setColour (hot ? pal::amber : colour);
+    g.fillRoundedRectangle (handle.withSizeKeepingCentre (22.0f, 2.5f), 1.2f);
+}
+
+void VsLookAndFeel::drawToggleButton (Graphics& g, ToggleButton& b, bool highlighted, bool)
+{
+    auto r = b.getLocalBounds().toFloat();
+    const auto sw = r.removeFromLeft (34.0f).withSizeKeepingCentre (30.0f, 16.0f);
+    const bool on = b.getToggleState();
+    g.setColour (on ? pal::teal.withAlpha (0.85f) : pal::groove);
+    g.fillRoundedRectangle (sw, 8.0f);
+    g.setColour (pal::text);
+    g.fillEllipse (sw.getX() + (on ? sw.getWidth() - 14.0f : 2.0f), sw.getY() + 2.0f, 12.0f, 12.0f);
+    g.setColour (highlighted ? pal::text : pal::dim.brighter (0.3f));
+    g.setFont (FontOptions (12.5f));
+    g.drawFittedText (b.getButtonText(), r.toNearestInt().withTrimmedLeft (6), Justification::centredLeft, 2);
+}
+
+// ---------------------------------------------------------------------------
 void MeterBar::setLevel (float linearPeak)
 {
     const float db = linearPeak > 0.0f ? jmax (-60.0f, Decibels::gainToDecibels (linearPeak)) : -60.0f;
-    // Fast attack, ~20 dB/s release at 30 Hz refresh.
     const float next = db > displayDb ? db : jmax (db, displayDb - 0.7f);
     if (std::abs (next - displayDb) > 0.05f)
     {
@@ -37,42 +158,47 @@ void MeterBar::setLevel (float linearPeak)
 void MeterBar::paint (Graphics& g)
 {
     auto r = getLocalBounds().toFloat();
-    auto led = r.removeFromTop (14.0f).reduced (2.0f, 1.0f);
-    g.setColour (clipped ? colours::clip : colours::panel.brighter (0.15f));
-    g.fillRoundedRectangle (led, 3.0f);
-    g.setColour (colours::text);
-    g.setFont (FontOptions (10.0f));
-    g.drawText (clipped ? "CLIP" : "", led, Justification::centred);
-
-    auto labelArea = r.removeFromBottom (16.0f);
-    g.setColour (colours::dim);
-    g.drawText (label, labelArea, Justification::centred);
-
-    r = r.reduced (4.0f, 2.0f);
-    g.setColour (colours::panel.brighter (0.05f));
-    g.fillRoundedRectangle (r, 3.0f);
     const float norm = jlimit (0.0f, 1.0f, (displayDb + 60.0f) / 60.0f);
-    auto fill = r.withTop (r.getBottom() - r.getHeight() * norm);
-    g.setColour (displayDb > -1.0f ? colours::clip : (displayDb > -12.0f ? Colours::gold : colours::accent));
-    g.fillRoundedRectangle (fill, 3.0f);
+    auto fillColour = [&] { return displayDb > -1.0f ? pal::red : (displayDb > -12.0f ? pal::amber : pal::teal); };
+    g.setFont (FontOptions (10.5f, Font::bold));
+    if (horizontal)
+    {
+        auto lab = r.removeFromLeft (30.0f);
+        g.setColour (pal::dim);
+        g.drawText (label, lab, Justification::centredLeft);
+        auto led = r.removeFromRight (30.0f).reduced (4.0f, 5.0f);
+        g.setColour (clipped ? pal::red : pal::groove);
+        g.fillRoundedRectangle (led, 3.0f);
+        auto bar = r.reduced (0.0f, 6.0f);
+        g.setColour (pal::groove);
+        g.fillRoundedRectangle (bar, 3.0f);
+        g.setColour (fillColour());
+        g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * norm), 3.0f);
+    }
+    else
+    {
+        auto labelArea = r.removeFromBottom (16.0f);
+        g.setColour (pal::dim);
+        g.drawText (label, labelArea, Justification::centred);
+        r = r.reduced (4.0f, 2.0f);
+        g.setColour (pal::groove);
+        g.fillRoundedRectangle (r, 3.0f);
+        g.setColour (fillColour());
+        g.fillRoundedRectangle (r.withTop (r.getBottom() - r.getHeight() * norm), 3.0f);
+    }
 }
 
 // ---------------------------------------------------------------------------
 VocalShiftEditor::VocalShiftEditor (VocalShiftProcessor& p)
     : AudioProcessorEditor (p), proc (p), state (p.getState())
 {
-    auto& lf = getLookAndFeel();
-    lf.setColour (Slider::rotarySliderFillColourId, colours::accent);
-    lf.setColour (Slider::textBoxOutlineColourId, Colours::transparentBlack);
-    lf.setColour (Label::textColourId, colours::text);
-    lf.setColour (ComboBox::backgroundColourId, colours::panel);
-    lf.setColour (TextButton::buttonColourId, colours::panel);
-    lf.setColour (TextButton::buttonOnColourId, colours::accent.darker (0.3f));
+    setLookAndFeel (&look);
 
     title.setText ("VocalShift AI Studio", dontSendNotification);
-    title.setFont (FontOptions (20.0f, Font::bold));
-    subtitle.setText (u8s ("v" VS_VERSION_STRING " · prototipo DSP · sin IA neuronal todavía"), dontSendNotification);
-    subtitle.setColour (Label::textColourId, colours::dim);
+    title.setFont (FontOptions (21.0f, Font::bold));
+    subtitle.setText (u8s ("v" VS_VERSION_STRING " · DSP, sin IA neuronal"), dontSendNotification);
+    subtitle.setColour (Label::textColourId, pal::dim);
+    subtitle.setFont (FontOptions (12.0f));
     addAndMakeVisible (title);
     addAndMakeVisible (subtitle);
 
@@ -97,67 +223,70 @@ VocalShiftEditor::VocalShiftEditor (VocalShiftProcessor& p)
     addAndMakeVisible (saveButton);
     addAndMakeVisible (loadButton);
 
-    // Voice mode (automatable parameter, shared by both pages)
     identityButton.setButtonText ("Conservar identidad");
     radicalButton.setButtonText (u8s ("Transformación radical"));
     identityButton.onClick = [this] { setVoiceMode (VoiceMode::keepIdentity); };
     radicalButton.onClick = [this] { setVoiceMode (VoiceMode::radical); };
-    addAndMakeVisible (identityButton);
-    addAndMakeVisible (radicalButton);
     transformButton.setButtonText ("Transformar");
     secondVoiceButton.setButtonText ("Segunda voz");
     transformButton.onClick = [this] { setRoute (VoiceRoute::transform); };
     secondVoiceButton.onClick = [this] { setRoute (VoiceRoute::secondVoice); };
-    addAndMakeVisible (transformButton);
-    addAndMakeVisible (secondVoiceButton);
-    modeDescription.setColour (Label::textColourId, colours::dim);
-    modeDescription.setJustificationType (Justification::topLeft);
+    for (auto* b : { &identityButton, &radicalButton, &transformButton, &secondVoiceButton })
+        addAndMakeVisible (b);
+    modeDescription.setColour (Label::textColourId, pal::dim);
+    modeDescription.setFont (FontOptions (12.5f));
+    modeDescription.setJustificationType (Justification::centredLeft);
     addAndMakeVisible (modeDescription);
-    status.setColour (Label::textColourId, colours::dim);
+    status.setColour (Label::textColourId, pal::dim);
+    status.setFont (FontOptions (12.0f));
     status.setJustificationType (Justification::centredLeft);
     addAndMakeVisible (status);
 
-    // Easy page: three macros
-    setupKnob (easyPitch, "Pitch", u8s ("Sube o baja la nota (semitonos). La duración no cambia."), params::semitones, true);
-    setupKnob (easyCharacter, u8s ("Carácter"), u8s ("Cuánto cambia el timbre: formantes y brillo."), params::character, true);
-    setupKnob (easyMagic, "Magia", u8s ("Pulido: compresión suave + aire en agudos."), params::magic, true);
+    // The three macros
+    setupKnob (pitchKnob, "PITCH", u8s ("Altura de la segunda voz (semitonos)."), params::semitones, true, pal::blue);
+    setupKnob (characterKnob, u8s ("CARÁCTER"), u8s ("Cuerpo, presencia, color y textura."), params::character, true, pal::violet);
+    setupKnob (magicKnob, "MAGIA", u8s ("Espacio y acabado: anchura, reverb, eco."), params::magic, true, pal::teal);
 
-    // Pro page
-    setupKnob (proPitch, "Pitch", {}, params::semitones, false);
-    setupKnob (proFine, "Ajuste fino", {}, params::fineCents, false);
-    setupKnob (proCharacter, u8s ("Carácter"), {}, params::character, false);
-    setupKnob (proMagic, "Magia", {}, params::magic, false);
-    setupKnob (proFormant, "Ajuste formantes", {}, params::formantShift, false);
-    setupKnob (proBrightness, "Ajuste brillo", {}, params::brightness, false);
-    setupKnob (proMix, "Mezcla", {}, params::mix, false);
-    setupKnob (proGain, "Ganancia salida", {}, params::outputGain, false);
-    setupKnob (proSecondGain, "Volumen 2.a voz", {}, params::secondGain, false);
-    setupKnob (proPan, "Pan 2.a voz", {}, params::pan, false);
-    setupKnob (proOffset, u8s ("Desfase artístico"), {}, params::offsetMs, false);
-    improvedButton.setButtonText (u8s ("DSP mejorado (consonantes, nivel robusto, mapeo de Carácter revisado). Apagado = comportamiento de versiones anteriores"));
-    improvedAttachment = std::make_unique<ButtonAttachment> (state, params::improved, improvedButton);
-    addChildComponent (improvedButton);
-    safetyButton.setButtonText (u8s ("Protección de picos (soft clip, techo 0 dBFS)"));
-    safetyAttachment = std::make_unique<ButtonAttachment> (state, params::safetyClip, safetyButton);
-    addChildComponent (safetyButton);
-    autoLevelButton.setButtonText (u8s ("Nivel automático (iguala el volumen procesado al original)"));
-    autoLevelAttachment = std::make_unique<ButtonAttachment> (state, params::autoLevel, autoLevelButton);
-    addChildComponent (autoLevelButton);
-    engineInfo.setColour (Label::textColourId, colours::dim);
+    // Fader
+    fader.setSliderStyle (Slider::LinearVertical);
+    fader.setTextBoxStyle (Slider::TextBoxBelow, false, 96, 24);
+    fader.setColour (Slider::rotarySliderFillColourId, pal::teal);
+    fader.setColour (Slider::textBoxTextColourId, pal::text);
+    fader.setColour (Slider::textBoxOutlineColourId, Colours::transparentBlack);
+    fader.setColour (Slider::textBoxBackgroundColourId, pal::panelHi.withAlpha (0.7f));
+    faderAttachment = std::make_unique<SliderAttachment> (state, params::secondGain, fader);
+    fader.setDoubleClickReturnValue (true, -12.0);
+    fader.onDoubleClickReset = [this] { return restoreFaderToPreset(); };
+    faderLabel.setText (u8s ("SEGUNDA VOZ"), dontSendNotification);
+    faderLabel.setJustificationType (Justification::centred);
+    faderLabel.setFont (FontOptions (13.0f, Font::bold));
+    addChildComponent (fader);
+    addChildComponent (faderLabel);
+    addChildComponent (secondMeter);
+
+    // Pro
+    setupKnob (proFine, "Ajuste fino", {}, params::fineCents, false, pal::blue);
+    setupKnob (proFormant, "Formantes", {}, params::formantShift, false, pal::violet);
+    setupKnob (proBrightness, "Brillo", {}, params::brightness, false, pal::violet);
+    setupKnob (proWidth, "Anchura", {}, params::spaceWidth, false, pal::teal);
+    setupKnob (proReverb, "Reverb", {}, params::spaceReverb, false, pal::teal);
+    setupKnob (proDelay, "Eco corto", {}, params::spaceDelay, false, pal::teal);
+    setupKnob (proMix, "Mezcla", {}, params::mix, false, pal::blue);
+    setupKnob (proPan, u8s ("Pan 2.ª voz"), {}, params::pan, false, pal::blue);
+    setupKnob (proOffset, u8s ("Desfase"), {}, params::offsetMs, false, pal::blue);
+    setupKnob (proGain, "Ganancia salida", {}, params::outputGain, false, pal::blue);
+    setupToggle (autoLevelButton, autoLevelAttachment, u8s ("Nivel automático"), params::autoLevel);
+    setupToggle (safetyButton, safetyAttachment, u8s ("Protección de picos"), params::safetyClip);
+    setupToggle (spatialButton, spatialAttachment, u8s ("Procesamiento espacial"), params::spatial);
+    setupToggle (improvedButton, improvedAttachment, u8s ("DSP mejorado (apagado = versiones anteriores)"), params::improved);
+    engineInfo.setColour (Label::textColourId, pal::dim);
+    engineInfo.setFont (FontOptions (12.0f));
     engineInfo.setJustificationType (Justification::topLeft);
     addChildComponent (engineInfo);
 
-    for (auto* k : { &easyPitch, &easyCharacter, &easyMagic })
-        k->slider.setColour (Slider::rotarySliderFillColourId, colours::accent);
-    easyMagic.slider.setColour (Slider::rotarySliderFillColourId, colours::morph);
-    proMagic.slider.setColour (Slider::rotarySliderFillColourId, colours::morph);
-
-    roadmap.setText (u8s ("Roadmap (NO disponible aún, sin controles): IA neuronal · Armonías · "
-                          "Doblaje · Edición por frases · Modo Live de baja latencia"),
-                     dontSendNotification);
-    roadmap.setColour (Label::textColourId, colours::dim);
-    roadmap.setFont (FontOptions (12.0f));
-    roadmap.setJustificationType (Justification::centredLeft);
+    roadmap.setText (u8s ("Pendiente (sin controles): IA neuronal · Armonías · Edición por frases · Modo Live de baja latencia"), dontSendNotification);
+    roadmap.setColour (Label::textColourId, pal::dim.withAlpha (0.7f));
+    roadmap.setFont (FontOptions (11.0f));
     addAndMakeVisible (roadmap);
 
     for (auto* m : { &inMeter, &outMeter })
@@ -174,41 +303,60 @@ VocalShiftEditor::VocalShiftEditor (VocalShiftProcessor& p)
     refreshModeButtons();
     setUiMode (proMode);
 
-    const int w = state.state.getProperty (params::propUiWidth, 900);
-    const int h = state.state.getProperty (params::propUiHeight, 680);
+    const int w = state.state.getProperty (params::propUiWidth, 940);
+    const int h = state.state.getProperty (params::propUiHeight, 700);
     setResizable (true, true);
-    setResizeLimits (760, 640, 1600, 1000);
-    setSize (jlimit (760, 1600, w), jlimit (640, 1000, h));
+    setResizeLimits (800, 640, 1700, 1100);
+    setSize (jlimit (800, 1700, w), jlimit (640, 1100, h));
 
-    timerCallback(); // populate preset name, status and engine info immediately
+    timerCallback();
     startTimerHz (30);
 }
 
 VocalShiftEditor::~VocalShiftEditor()
 {
     stopTimer();
+    setLookAndFeel (nullptr);
 }
 
-void VocalShiftEditor::setupKnob (Knob& k, const String& text, const String& hint, const char* paramId, bool big)
+void VocalShiftEditor::setupKnob (Knob& k, const String& text, const String& hint, const char* paramId, bool big, Colour colour)
 {
-    k.slider.setTextBoxStyle (Slider::TextBoxBelow, false, 90, 20);
+    k.slider.setTextBoxStyle (Slider::TextBoxBelow, false, 96, big ? 24 : 20);
+    k.slider.setColour (Slider::rotarySliderFillColourId, colour);
+    k.slider.setColour (Slider::textBoxOutlineColourId, Colours::transparentBlack);
+    k.slider.setColour (Slider::textBoxBackgroundColourId, pal::panelHi.withAlpha (0.7f));
+    k.slider.setRotaryParameters (degreesToRadians (225.0f), degreesToRadians (495.0f), true);
+    k.slider.setVelocityBasedMode (false);
+    k.slider.setScrollWheelEnabled (true);
     k.label.setText (text, dontSendNotification);
     k.label.setJustificationType (Justification::centred);
-    if (big)
-        k.label.setFont (FontOptions (18.0f, Font::bold));
+    k.label.setFont (big ? FontOptions (17.0f, Font::bold) : FontOptions (12.5f, Font::plain));
+    k.label.setColour (Label::textColourId, big ? pal::text : pal::dim.brighter (0.4f));
     k.hint.setText (hint, dontSendNotification);
     k.hint.setJustificationType (Justification::centredTop);
-    k.hint.setColour (Label::textColourId, colours::dim);
+    k.hint.setColour (Label::textColourId, pal::dim);
     k.hint.setFont (FontOptions (12.0f));
     addChildComponent (k.slider);
     addChildComponent (k.label);
     addChildComponent (k.hint);
-    k.attachment = std::make_unique<SliderAttachment> (state, paramId, k.slider);
+    k.attachment = std::make_unique<SliderAttachment> (state, paramId, k.slider); // also sets double click = parameter default
+}
+
+void VocalShiftEditor::setupToggle (ToggleButton& b, std::unique_ptr<ButtonAttachment>& att, const String& text, const char* paramId)
+{
+    b.setButtonText (text);
+    att = std::make_unique<ButtonAttachment> (state, paramId, b);
+    addChildComponent (b);
 }
 
 VoiceMode VocalShiftEditor::voiceMode() const
 {
     return state.getRawParameterValue (params::mode)->load() >= 0.5f ? VoiceMode::radical : VoiceMode::keepIdentity;
+}
+
+VoiceRoute VocalShiftEditor::route() const
+{
+    return state.getRawParameterValue (params::route)->load() >= 0.5f ? VoiceRoute::secondVoice : VoiceRoute::transform;
 }
 
 void VocalShiftEditor::setVoiceMode (VoiceMode m)
@@ -223,11 +371,6 @@ void VocalShiftEditor::setVoiceMode (VoiceMode m)
     refreshModeButtons();
 }
 
-VoiceRoute VocalShiftEditor::route() const
-{
-    return state.getRawParameterValue (params::route)->load() >= 0.5f ? VoiceRoute::secondVoice : VoiceRoute::transform;
-}
-
 void VocalShiftEditor::setRoute (VoiceRoute r)
 {
     if (auto* param = state.getParameter (params::route))
@@ -240,60 +383,83 @@ void VocalShiftEditor::setRoute (VoiceRoute r)
     refreshModeButtons();
 }
 
+bool VocalShiftEditor::restoreFaderToPreset()
+{
+    // Double click: the value of the current factory preset, or the parameter default for user presets.
+    float target = -12.0f;
+    if (const auto* fp = findFactoryPreset (proc.getPresetManager().currentPresetId().toStdString()))
+        target = fp->params.secondGainDb;
+    if (auto* param = state.getParameter (params::secondGain))
+    {
+        param->beginChangeGesture();
+        param->setValueNotifyingHost (param->convertTo0to1 (target));
+        param->endChangeGesture();
+    }
+    return true;
+}
+
 void VocalShiftEditor::refreshModeButtons()
 {
     const bool radical = shownVoiceMode == VoiceMode::radical;
-    identityButton.setColour (TextButton::buttonColourId, radical ? colours::panel : colours::accent.darker (0.3f));
-    radicalButton.setColour (TextButton::buttonColourId, radical ? colours::morph.darker (0.3f) : colours::panel);
-    easyCharacter.slider.setColour (Slider::rotarySliderFillColourId, radical ? colours::morph : colours::accent);
     const bool second = shownRoute == VoiceRoute::secondVoice;
-    transformButton.setColour (TextButton::buttonColourId, second ? colours::panel : colours::accent.darker (0.3f));
-    secondVoiceButton.setColour (TextButton::buttonColourId, second ? colours::accent.darker (0.3f) : colours::panel);
+    auto on = [] (Colour c) { return c.darker (0.25f); };
+    identityButton.setColour (TextButton::buttonColourId, radical ? pal::panelHi : on (pal::blue));
+    radicalButton.setColour (TextButton::buttonColourId, radical ? on (pal::violet) : pal::panelHi);
+    transformButton.setColour (TextButton::buttonColourId, second ? pal::panelHi : on (pal::blue));
+    secondVoiceButton.setColour (TextButton::buttonColourId, second ? on (pal::teal) : pal::panelHi);
+    characterKnob.slider.setColour (Slider::rotarySliderFillColourId, radical ? pal::amber : pal::violet);
     for (auto* k : { &proMix })
         k->slider.setEnabled (! second);
-    for (auto* k : { &proSecondGain, &proPan, &proOffset })
+    for (auto* k : { &proPan, &proOffset, &proWidth, &proReverb, &proDelay })
         k->slider.setEnabled (second);
+    spatialButton.setEnabled (second);
+
     String d;
     if (second)
-        d << u8s ("Segunda voz: tu voz original sigue al frente (sin cambio de tono, 0 dB) y se suma una segunda voz "
-                  "transpuesta, más baja (−9 dB por defecto). Los tres macros controlan solo la segunda voz. ");
-    if (shownImproved)
-        d << (radical
-            ? u8s ("Radical: los formantes se mueven 0.7 × el intervalo + hasta 2 st con Carácter (nunca más que el tono); brillo hasta 2.5 dB. Sigue siendo DSP, no conversión por IA.")
-            : u8s ("Identidad: los formantes se compensan y se mueven 0.25 × el intervalo + hasta 0.4 st con Carácter; brillo hasta 1 dB."));
+        d << (state.getRawParameterValue (params::spatial)->load() >= 0.5f && shownImproved
+                  ? u8s ("Segunda voz: tu voz queda al frente sin cambios; detrás, una voz procesada ancha y con espacio (Magia). ")
+                  : u8s ("Segunda voz: tu voz queda al frente sin cambios; detrás, la voz procesada. "));
     else
-        d << (radical
-            ? u8s ("Radical (DSP anterior): los formantes siguen al tono y Carácter los empuja hasta 6 st; brillo hasta 6 dB.")
-            : u8s ("Identidad (DSP anterior): formantes casi en su sitio; Carácter añade hasta 1 st y 1.5 dB."));
+        d << u8s ("Transformar: la voz procesada reemplaza a la original. ");
+    d << (radical ? u8s ("Radical: los formantes siguen más al tono. Sigue siendo DSP, no conversión por IA.")
+                  : u8s ("Identidad: los formantes se mantienen cerca de los originales."));
     modeDescription.setText (d, dontSendNotification);
+    layoutVisibility();
     repaint();
+}
+
+void VocalShiftEditor::layoutVisibility()
+{
+    const bool second = shownRoute == VoiceRoute::secondVoice;
+    for (auto* c : { (Component*) &fader, (Component*) &faderLabel, (Component*) &secondMeter })
+        c->setVisible (second);
 }
 
 void VocalShiftEditor::setUiMode (bool pro)
 {
     proMode = pro;
     state.state.setProperty (params::propUiMode, pro ? "pro" : "easy", nullptr);
-    easyTab.setColour (TextButton::buttonColourId, pro ? colours::panel : colours::accent.darker (0.3f));
-    proTab.setColour (TextButton::buttonColourId, pro ? colours::accent.darker (0.3f) : colours::panel);
+    easyTab.setColour (TextButton::buttonColourId, pro ? pal::panelHi : pal::blue.darker (0.25f));
+    proTab.setColour (TextButton::buttonColourId, pro ? pal::blue.darker (0.25f) : pal::panelHi);
 
-    for (auto* k : { &easyPitch, &easyCharacter, &easyMagic })
+    for (auto* k : { &pitchKnob, &characterKnob, &magicKnob })
     {
-        k->slider.setVisible (! pro);
-        k->label.setVisible (! pro);
+        k->slider.setVisible (true);
+        k->label.setVisible (true);
         k->hint.setVisible (! pro);
     }
-    for (auto* k : { &proPitch, &proFine, &proCharacter, &proMagic, &proFormant, &proBrightness, &proMix, &proGain,
-                      &proSecondGain, &proPan, &proOffset })
+    for (auto* k : { &proFine, &proFormant, &proBrightness, &proMix, &proGain, &proPan, &proOffset, &proWidth, &proReverb, &proDelay })
     {
         k->slider.setVisible (pro);
         k->label.setVisible (pro);
     }
     modeDescription.setVisible (! pro);
-    safetyButton.setVisible (pro);
-    autoLevelButton.setVisible (pro);
-    improvedButton.setVisible (pro);
+    for (auto* b : { &safetyButton, &autoLevelButton, &improvedButton, &spatialButton })
+        b->setVisible (pro);
     engineInfo.setVisible (pro);
+    layoutVisibility();
     resized();
+    repaint();
 }
 
 void VocalShiftEditor::rebuildPresetMenu()
@@ -388,16 +554,18 @@ void VocalShiftEditor::loadPreset()
 
 String VocalShiftEditor::effectiveSummary() const
 {
-    // Shows what the macros actually do right now (same mapping the audio thread uses).
     const auto e = mapMacros (proc.getCurrentVoiceParams());
     if (state.getRawParameterValue (params::bypass)->load() >= 0.5f)
         return "BYPASS activo (salida = entrada, alineada en latencia)";
     String s;
     s << "Efectivo: tono " << (e.semitones >= 0 ? "+" : "") << String (e.semitones, 2) << " st"
-      << u8s (" · formantes siguen el ") << String (roundToInt ((1.0f - e.formantPreservation) * 100.0f)) << u8s (" % del tono")
-      << " y se desplazan " << String (e.formantShiftSemitones, 1) << " st"
-      << u8s (" · brillo ") << String (e.brightnessDb, 1) << " dB"
-      << u8s (" · compresión ") << String (1.0f + 3.0f * e.magic01, 1) << ":1, aire +" << String (5.0f * e.magic01, 1) << " dB";
+      << u8s (" · formantes ") << String (e.formantShiftSemitones, 1) << " st"
+      << u8s (" · brillo ") << String (e.brightnessDb, 1) << " dB";
+    if (e.spatialAmount > 0.0f)
+        s << u8s (" · anchura ") << String (roundToInt (e.spaceWidth * 100.0f)) << u8s (" % · reverb ") << String (roundToInt (e.spaceReverb * 100.0f))
+          << u8s (" % (RT60 ") << String (e.spaceRt60, 1) << u8s (" s) · eco ") << String (roundToInt (e.spaceSlap * 100.0f)) << u8s (" % · cuerpo/presencia ") << String (roundToInt (e.textureAmount * 100.0f)) << " %";
+    else
+        s << u8s (" · compresión ") << String (1.0f + 3.0f * e.magic01, 1) << ":1, aire +" << String (5.0f * e.magic01, 1) << " dB";
     return s;
 }
 
@@ -405,6 +573,7 @@ void VocalShiftEditor::timerCallback()
 {
     inMeter.setLevel (proc.consumeInputPeak());
     outMeter.setLevel (proc.consumeOutputPeak());
+    secondMeter.setLevel (proc.consumeSecondVoicePeak());
     inMeter.setClipped (proc.inputClipped());
     outMeter.setClipped (proc.outputClipped());
 
@@ -423,26 +592,56 @@ void VocalShiftEditor::timerCallback()
     if (! status.getText().startsWith ("Preset"))
         status.setText (effectiveSummary(), dontSendNotification);
 
-    const double sr = proc.getPreparedSampleRate();
-    const int lat = proc.getEngineLatencySamples();
-    String info;
-    info << "Motor: " << proc.getEngineName() << u8s (" (modo calidad: bloque 120 ms, cálculo repartido)\n")
-         << "Latencia reportada al host: " << lat << " muestras";
-    if (sr > 0)
-        info << " (" << String (1000.0 * lat / sr, 1) << " ms a " << String (sr / 1000.0, 1) << " kHz)";
-    info << u8s (" · nivel automático: ") << String (proc.getAutoLevelGainDb(), 1) << " dB";
-    info << u8s ("\nNo apto para monitoreo en vivo: no existe todavía un modo de baja latencia.");
-    if (proc.getNonFiniteEvents() > 0)
-        info << u8s ("\nAviso: se silenciaron ") << proc.getNonFiniteEvents() << u8s (" bloques con valores no finitos.");
-    engineInfo.setText (info, dontSendNotification);
+    if (proMode)
+    {
+        const double sr = proc.getPreparedSampleRate();
+        const int lat = proc.getEngineLatencySamples();
+        String info;
+        info << "Motor: " << proc.getEngineName() << u8s (" (calidad, bloque 120 ms)\n")
+             << "Latencia reportada al host: " << lat << " muestras";
+        if (sr > 0)
+            info << " (" << String (1000.0 * lat / sr, 1) << " ms a " << String (sr / 1000.0, 1) << " kHz)";
+        info << u8s ("\nNivel automático: ") << String (proc.getAutoLevelGainDb(), 1) << u8s (" dB · espacio: ") << (proc.getSpatialActive() ? "activo" : "inactivo");
+        info << u8s ("\nNo apto para monitoreo en vivo: no existe un modo de baja latencia.");
+        if (proc.getNonFiniteEvents() > 0)
+            info << u8s ("\nAviso: se silenciaron ") << proc.getNonFiniteEvents() << u8s (" bloques con valores no finitos.");
+        engineInfo.setText (info, dontSendNotification);
+    }
 }
 
 void VocalShiftEditor::paint (Graphics& g)
 {
-    g.fillAll (colours::bg);
+    g.fillAll (pal::bg);
     auto r = getLocalBounds();
-    g.setColour (colours::panel);
-    g.fillRect (r.removeFromTop (56));
+    auto top = r.removeFromTop (92);
+    g.setGradientFill (ColourGradient (pal::panelHi, 0, 0, pal::panel, 0, (float) top.getHeight(), false));
+    g.fillRect (top);
+    g.setColour (pal::blue.withAlpha (0.55f));
+    g.fillRect (top.removeFromBottom (2));
+
+    if (proMode)
+    {
+        g.setFont (FontOptions (11.5f, Font::bold));
+        for (int i = 0; i < 6; ++i)
+        {
+            if (proPanels[i].isEmpty()) continue;
+            auto pr = proPanels[i].toFloat();
+            g.setColour (pal::panel);
+            g.fillRoundedRectangle (pr, 10.0f);
+            g.setColour (pal::groove);
+            g.drawRoundedRectangle (pr, 10.0f, 1.0f);
+            g.setColour (i == 3 ? pal::teal : (i == 1 ? pal::violet : pal::blue));
+            g.drawText (u8s (proPanelTitles[i]), pr.reduced (12.0f, 6.0f).removeFromTop (16.0f), Justification::centredLeft);
+        }
+    }
+    else if (shownRoute == VoiceRoute::secondVoice)
+    {
+        auto strip = faderStrip.toFloat();
+        g.setColour (pal::panel);
+        g.fillRoundedRectangle (strip, 14.0f);
+        g.setColour (pal::groove);
+        g.drawRoundedRectangle (strip, 14.0f, 1.0f);
+    }
 }
 
 void VocalShiftEditor::resized()
@@ -451,72 +650,142 @@ void VocalShiftEditor::resized()
     state.state.setProperty (params::propUiHeight, getHeight(), nullptr);
 
     auto r = getLocalBounds();
-    auto header = r.removeFromTop (56).reduced (12, 8);
-    auto titleArea = header.removeFromLeft (260);
-    title.setBounds (titleArea.removeFromTop (24));
+    auto header = r.removeFromTop (92).reduced (16, 10);
+    // top row: logo, preset, Easy/Pro, bypass
+    auto row1 = header.removeFromTop (34);
+    auto titleArea = row1.removeFromLeft (250);
+    title.setBounds (titleArea.removeFromTop (22));
     subtitle.setBounds (titleArea);
-    bypassButton.setBounds (header.removeFromRight (90));
-    header.removeFromRight (8);
-    loadButton.setBounds (header.removeFromRight (70).reduced (0, 4));
-    header.removeFromRight (4);
-    saveButton.setBounds (header.removeFromRight (70).reduced (0, 4));
-    header.removeFromRight (8);
-    presetBox.setBounds (header.removeFromRight (jmin (260, header.getWidth() / 2)).reduced (0, 4));
-    header.removeFromRight (8);
-    proTab.setBounds (header.removeFromRight (60).reduced (0, 4));
-    easyTab.setBounds (header.removeFromRight (60).reduced (0, 4));
+    bypassButton.setBounds (row1.removeFromRight (86));
+    row1.removeFromRight (8);
+    proTab.setBounds (row1.removeFromRight (64).reduced (0, 2));
+    easyTab.setBounds (row1.removeFromRight (64).reduced (0, 2));
+    row1.removeFromRight (14);
+    loadButton.setBounds (row1.removeFromRight (70).reduced (0, 2));
+    row1.removeFromRight (4);
+    saveButton.setBounds (row1.removeFromRight (70).reduced (0, 2));
+    row1.removeFromRight (8);
+    presetBox.setBounds (row1.removeFromRight (jmin (300, row1.getWidth() - 10)).reduced (0, 2));
+    header.removeFromTop (8);
+    // second row: route and mode selectors
+    auto row2 = header.removeFromTop (30);
+    const int bw = jmin (190, (row2.getWidth() - 24) / 4);
+    transformButton.setBounds (row2.removeFromLeft (bw).reduced (2, 0));
+    secondVoiceButton.setBounds (row2.removeFromLeft (bw).reduced (2, 0));
+    row2.removeFromLeft (22);
+    identityButton.setBounds (row2.removeFromLeft (bw).reduced (2, 0));
+    radicalButton.setBounds (row2.removeFromLeft (bw).reduced (2, 0));
 
-    r.reduce (12, 8);
-    roadmap.setBounds (r.removeFromBottom (22));
-    status.setBounds (r.removeFromBottom (22));
-    auto meters = r.removeFromRight (90);
-    inMeter.setBounds (meters.removeFromLeft (45));
+    r.reduce (16, 10);
+    // bottom strip: meters, status, roadmap
+    auto bottom = r.removeFromBottom (74);
+    auto meters = bottom.removeFromTop (22);
+    inMeter.setBounds (meters.removeFromLeft (meters.getWidth() / 2 - 8));
+    meters.removeFromLeft (16);
     outMeter.setBounds (meters);
-    r.removeFromRight (12);
+    status.setBounds (bottom.removeFromTop (24));
+    roadmap.setBounds (bottom.removeFromTop (20));
+    r.removeFromBottom (6);
 
-    auto modeRow = r.removeFromTop (36);
-    identityButton.setBounds (modeRow.removeFromLeft (modeRow.getWidth() / 2).reduced (2));
-    radicalButton.setBounds (modeRow.reduced (2));
-    auto routeRow = r.removeFromTop (36);
-    transformButton.setBounds (routeRow.removeFromLeft (routeRow.getWidth() / 2).reduced (2));
-    secondVoiceButton.setBounds (routeRow.reduced (2));
+    const bool second = shownRoute == VoiceRoute::secondVoice;
+    Rectangle<int> faderArea;
+    if (second)
+        faderArea = r.removeFromRight (jlimit (150, 200, r.getWidth() / 5));
 
     if (! proMode)
     {
-        modeDescription.setBounds (r.removeFromTop (40));
-        auto macros = r.reduced (0, 4);
+        modeDescription.setBounds (r.removeFromTop (34));
+        auto macros = r.reduced (0, 6);
         const int w = macros.getWidth() / 3;
-        for (auto* k : { &easyPitch, &easyCharacter, &easyMagic })
+        for (auto* k : { &pitchKnob, &characterKnob, &magicKnob })
         {
-            auto cell = macros.removeFromLeft (w).reduced (8, 0);
-            k->label.setBounds (cell.removeFromTop (26));
-            k->hint.setBounds (cell.removeFromBottom (32));
-            const int side = jmin (cell.getWidth(), cell.getHeight(), 230);
-            k->slider.setBounds (cell.withSizeKeepingCentre (side, side));
+            auto cell = macros.removeFromLeft (w).reduced (10, 0);
+            k->label.setBounds (cell.removeFromTop (28));
+            k->hint.setBounds (cell.removeFromBottom (34));
+            const int side = jmin (cell.getWidth(), cell.getHeight() - 30, 270);
+            auto knobArea = cell.withSizeKeepingCentre (jmax (60, side), jmax (60, side + 30));
+            k->slider.setBounds (knobArea);
         }
     }
     else
     {
-        r.removeFromTop (6);
-        auto infoArea = r.removeFromBottom (130);
-        improvedButton.setBounds (infoArea.removeFromTop (22));
-        safetyButton.setBounds (infoArea.removeFromTop (22));
-        autoLevelButton.setBounds (infoArea.removeFromTop (22));
-        engineInfo.setBounds (infoArea);
-        auto top = r.removeFromTop (r.getHeight() / 3);
-        auto mid = r.removeFromTop (r.getHeight() / 2);
-        auto layoutRow = [] (Rectangle<int> row, std::initializer_list<Knob*> ks) {
-            const int w = row.getWidth() / (int) ks.size();
+        for (auto& p : proPanels) p = {};
+        auto grid = r;
+        auto rowTop = grid.removeFromTop (grid.getHeight() * 45 / 100);
+        grid.removeFromTop (8);
+        auto rowMid = grid.removeFromTop (grid.getHeight() * 55 / 100);
+        grid.removeFromTop (8);
+        auto rowBottom = grid;
+
+        auto place = [] (Rectangle<int> area, std::initializer_list<Knob*> ks, int headerH = 24) {
+            area.removeFromTop (headerH);
+            area.reduce (6, 2);
+            const int w = area.getWidth() / (int) ks.size();
             for (auto* k : ks)
             {
-                auto cell = row.removeFromLeft (w).reduced (4);
-                k->label.setBounds (cell.removeFromTop (20));
+                auto cell = area.removeFromLeft (w).reduced (3, 0);
+                k->label.setBounds (cell.removeFromTop (16));
                 k->slider.setBounds (cell);
             }
         };
-        layoutRow (top, { &proPitch, &proFine, &proCharacter, &proMagic });
-        layoutRow (mid, { &proFormant, &proBrightness, &proMix, &proGain });
-        layoutRow (r, { &proSecondGain, &proPan, &proOffset });
+        // row 1: Pitch | Timbre | Dinámica
+        const int w1 = rowTop.getWidth();
+        proPanels[0] = rowTop.removeFromLeft (w1 * 28 / 100);
+        rowTop.removeFromLeft (8);
+        proPanels[1] = rowTop.removeFromLeft (w1 * 37 / 100);
+        rowTop.removeFromLeft (8);
+        proPanels[2] = rowTop;
+        place (proPanels[0], { &pitchKnob, &proFine });
+        place (proPanels[1], { &characterKnob, &proFormant, &proBrightness });
+        {
+            auto a = proPanels[2];
+            a.removeFromTop (24);
+            a.reduce (6, 2);
+            auto knobCell = a.removeFromLeft (a.getWidth() / 2).reduced (3, 0);
+            magicKnob.label.setBounds (knobCell.removeFromTop (16));
+            magicKnob.slider.setBounds (knobCell);
+            autoLevelButton.setBounds (a.removeFromTop (a.getHeight() / 2).withSizeKeepingCentre (a.getWidth(), 34));
+            safetyButton.setBounds (a.withSizeKeepingCentre (a.getWidth(), 34));
+        }
+        // row 2: Espacio | Mezcla
+        const int w2 = rowMid.getWidth();
+        proPanels[3] = rowMid.removeFromLeft (w2 * 42 / 100);
+        rowMid.removeFromLeft (8);
+        proPanels[4] = rowMid;
+        {
+            auto a = proPanels[3];
+            auto inner = a;
+            inner.removeFromTop (24);
+            inner.reduce (6, 2);
+            spatialButton.setBounds (inner.removeFromBottom (30));
+            const int w = inner.getWidth() / 3;
+            for (auto* k : { &proWidth, &proReverb, &proDelay })
+            {
+                auto cell = inner.removeFromLeft (w).reduced (3, 0);
+                k->label.setBounds (cell.removeFromTop (16));
+                k->slider.setBounds (cell);
+            }
+        }
+        place (proPanels[4], { &proMix, &proPan, &proOffset, &proGain });
+        // row 3: Calidad y diagnóstico
+        proPanels[5] = rowBottom;
+        {
+            auto a = proPanels[5];
+            a.removeFromTop (24);
+            a.reduce (12, 2);
+            improvedButton.setBounds (a.removeFromTop (28));
+            engineInfo.setBounds (a);
+        }
+    }
+
+    faderStrip = faderArea.reduced (4, 0);
+    if (second)
+    {
+        auto f = faderArea.reduced (14, 10);
+        faderLabel.setBounds (f.removeFromTop (22));
+        auto m = f.removeFromRight (22);
+        secondMeter.setBounds (m.withTrimmedTop (4).withTrimmedBottom (28));
+        fader.setBounds (f.withTrimmedTop (4));
     }
 }
 

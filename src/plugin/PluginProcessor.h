@@ -36,7 +36,7 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.25; }
+    double getTailLengthSeconds() const override { return 2.5; } // reverb tail (RT60 up to 2 s)
 
     // Factory presets are handled by PresetManager / the editor, not host programs.
     int getNumPrograms() override { return 1; }
@@ -54,6 +54,7 @@ public:
     // Metering (audio thread writes, UI thread reads and clears).
     float consumeInputPeak() { return inputPeak.exchange (0.0f); }
     float consumeOutputPeak() { return outputPeak.exchange (0.0f); }
+    float consumeSecondVoicePeak() { return secondPeak.exchange (0.0f); }
     bool inputClipped() const { return inputClip.load(); }
     bool outputClipped() const { return outputClip.load(); }
     void clearClipIndicators() { inputClip = false; outputClip = false; }
@@ -62,6 +63,7 @@ public:
     double getPreparedSampleRate() const { return preparedRate.load(); }
     const char* getEngineName() const { return chain.engineName(); }
     int getNonFiniteEvents() const { return chain.nonFiniteEvents(); }
+    bool getSpatialActive() const { return chain.spatialActive(); }
     float getAutoLevelGainDb() const { return chain.autoLevelGainDb(); }
     VoiceParams getCurrentVoiceParams() const { return raw.read(); }
 
@@ -76,7 +78,7 @@ private:
     PresetManager presets;
     VocalChain chain;
 
-    std::atomic<float> inputPeak { 0.0f }, outputPeak { 0.0f };
+    std::atomic<float> inputPeak { 0.0f }, outputPeak { 0.0f }, secondPeak { 0.0f };
     std::atomic<bool> inputClip { false }, outputClip { false };
     std::atomic<int> latencySamples { 0 };
     std::atomic<double> preparedRate { 0.0 };

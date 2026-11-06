@@ -58,7 +58,14 @@ AudioProcessorValueTreeState::ParameterLayout createLayout()
         StringArray { "Transformar", "Segunda voz" }, (int) defaults.route));
 
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { secondGain, 3 }, "Volumen segunda voz",
-        NormalisableRange<float> (-30.0f, 0.0f, 0.1f), defaults.secondGainDb, attrs (" dB", 1)));
+        NormalisableRange<float> (-60.0f, 6.0f, 0.1f), defaults.secondGainDb,
+        AudioParameterFloatAttributes()
+            .withLabel (" dB")
+            .withStringFromValueFunction ([] (float v, int) { return v <= -59.9f ? String::fromUTF8 ("−∞ dB") : String (v, 1) + " dB"; })
+            .withValueFromStringFunction ([] (const String& t) {
+                const auto s = t.trim().toLowerCase();
+                return s.contains ("inf") || s.contains ("sil") ? -60.0f : s.getFloatValue();
+            })));
 
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { pan, 3 }, "Pan segunda voz",
         NormalisableRange<float> (-100.0f, 100.0f, 1.0f), defaults.pan, attrs (" %", 0)));
@@ -67,6 +74,14 @@ AudioProcessorValueTreeState::ParameterLayout createLayout()
         NormalisableRange<float> (0.0f, 100.0f, 0.1f), defaults.offsetMs, attrs (" ms", 1)));
 
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { improved, 3 }, "DSP mejorado", defaults.improved));
+
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { spatial, 4 }, String::fromUTF8 ("Procesamiento espacial"), defaults.spatial));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { spaceWidth, 4 }, "Anchura",
+        NormalisableRange<float> (0.0f, 100.0f, 1.0f), defaults.spaceWidth, attrs (" %", 0)));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { spaceReverb, 4 }, "Reverb",
+        NormalisableRange<float> (0.0f, 100.0f, 1.0f), defaults.spaceReverb, attrs (" %", 0)));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { spaceDelay, 4 }, "Eco corto",
+        NormalisableRange<float> (0.0f, 100.0f, 1.0f), defaults.spaceDelay, attrs (" %", 0)));
 
     return layout;
 }
@@ -95,6 +110,10 @@ void RawParams::bind (AudioProcessorValueTreeState& s)
     pan = get (params::pan);
     offsetMs = get (params::offsetMs);
     improved = get (params::improved);
+    spatial = get (params::spatial);
+    spaceWidth = get (params::spaceWidth);
+    spaceReverb = get (params::spaceReverb);
+    spaceDelay = get (params::spaceDelay);
 }
 
 VoiceParams RawParams::read() const
@@ -116,6 +135,10 @@ VoiceParams RawParams::read() const
     p.pan = pan->load();
     p.offsetMs = offsetMs->load();
     p.improved = improved->load() >= 0.5f;
+    p.spatial = spatial->load() >= 0.5f;
+    p.spaceWidth = spaceWidth->load();
+    p.spaceReverb = spaceReverb->load();
+    p.spaceDelay = spaceDelay->load();
     return p;
 }
 
@@ -145,6 +168,10 @@ void applyToParameters (AudioProcessorValueTreeState& s, const VoiceParams& p)
     set (pan, p.pan);
     set (offsetMs, p.offsetMs);
     set (improved, p.improved ? 1.0f : 0.0f);
+    set (spatial, p.spatial ? 1.0f : 0.0f);
+    set (spaceWidth, p.spaceWidth);
+    set (spaceReverb, p.spaceReverb);
+    set (spaceDelay, p.spaceDelay);
 }
 
 } // namespace vs::params

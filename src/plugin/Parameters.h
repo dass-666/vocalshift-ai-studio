@@ -25,12 +25,18 @@ inline constexpr const char* route = "route";           // 0 = transformar, 1 = 
 inline constexpr const char* secondGain = "secondGain"; // Pro: second voice level relative to the original (dB)
 inline constexpr const char* pan = "pan";               // Pro: second voice balance (-100..100)
 inline constexpr const char* offsetMs = "offsetMs";     // Pro: artistic delay of the second voice (0..100 ms)
-inline constexpr const char* improved = "improved";     // Pro: revised DSP (off = exact behaviour of earlier versions)
+inline constexpr const char* improved = "improved";
+// v4: Urban Spatial Engine
+inline constexpr const char* spatial = "spatial";           // Pro: spatial processing + Caracter texture on the second voice
+inline constexpr const char* spaceWidth = "spaceWidth";     // Pro trims (percent of what Magia asks for)
+inline constexpr const char* spaceReverb = "spaceReverb";
+inline constexpr const char* spaceDelay = "spaceDelay";     // Pro: revised DSP (off = exact behaviour of earlier versions)
 
 // Every automatable parameter except bypass (presets never touch bypass).
 inline constexpr const char* presetParamIds[] = { mode, semitones, fineCents, character, magic, formantShift,
                                                   brightness, mix, outputGain, safetyClip, autoLevel,
-                                                  route, secondGain, pan, offsetMs, improved };
+                                                  route, secondGain, pan, offsetMs, improved,
+                                                  spatial, spaceWidth, spaceReverb, spaceDelay };
 
 // Non-automatable state stored as ValueTree properties.
 inline constexpr const char* propUiMode = "uiMode";         // "easy" | "pro"
@@ -45,7 +51,9 @@ inline constexpr const char* legacyPropEngineMode = "engineMode"; // v1 only, mi
 // v3: second voice (route, secondGain, pan, offsetMs) and the revised-DSP switch (improved).
 //     States and presets older than v3 are migrated with route = transform and improved = off,
 //     so they sound exactly like they did.
-inline constexpr int currentStateVersion = 3;
+// v4: Urban Spatial Engine (spatial, spaceWidth, spaceReverb, spaceDelay); the second-voice fader range grew to
+//     -60 (silence) .. +6 dB. States and presets older than v4 are migrated with spatial = off (Phase 3 sound).
+inline constexpr int currentStateVersion = 4;
 
 juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
@@ -69,6 +77,10 @@ struct RawParams
     std::atomic<float>* pan = nullptr;
     std::atomic<float>* offsetMs = nullptr;
     std::atomic<float>* improved = nullptr;
+    std::atomic<float>* spatial = nullptr;
+    std::atomic<float>* spaceWidth = nullptr;
+    std::atomic<float>* spaceReverb = nullptr;
+    std::atomic<float>* spaceDelay = nullptr;
 
     void bind (juce::AudioProcessorValueTreeState& apvts);
     VoiceParams read() const;
