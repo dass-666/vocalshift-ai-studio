@@ -372,9 +372,85 @@ void IdentityPanel::setLevel (float linearPeak)
     }
 }
 
+Rectangle<float> IdentityPanel::faceBox() const
+{
+    // square box for the profile drawing (unit coordinates 0..1); wider than the panel is fine, it is clipped
+    const float side = jmin ((float) getWidth() * 1.45f, (float) getHeight() * 0.92f);
+    return { (float) getWidth() * 0.5f - side * 0.5f, (float) getHeight() * 0.03f, side, side };
+}
+
 Point<float> IdentityPanel::ringCentre() const
 {
-    return { (float) getWidth() * 0.5f, (float) getHeight() * 0.43f };
+    const auto fb = faceBox();
+    return { fb.getX() + fb.getWidth() * 0.50f, fb.getY() + fb.getHeight() * 0.38f };
+}
+
+// Original line-art profile (drawn for VocalShift; not traced from any photo or product).
+// Coordinates are in a unit box; the face looks to the right, towards the PITCH column.
+static Point<float> fp (Rectangle<float> b, float x, float y) { return { b.getX() + x * b.getWidth(), b.getY() + y * b.getHeight() }; }
+
+Path IdentityPanel::faceSilhouette (Rectangle<float> b)
+{
+    Path p;
+    auto c = [&] (float x1, float y1, float x2, float y2, float x, float y) { p.cubicTo (fp (b, x1, y1), fp (b, x2, y2), fp (b, x, y)); };
+    p.startNewSubPath (fp (b, 0.520f, 0.100f));
+    c (0.620f, 0.110f, 0.670f, 0.190f, 0.665f, 0.290f); // forehead
+    c (0.665f, 0.320f, 0.672f, 0.335f, 0.668f, 0.350f); // brow ridge
+    c (0.680f, 0.390f, 0.720f, 0.430f, 0.742f, 0.458f); // nose
+    c (0.748f, 0.475f, 0.715f, 0.490f, 0.690f, 0.488f); // under the nose
+    c (0.695f, 0.503f, 0.713f, 0.512f, 0.710f, 0.522f); // upper lip
+    p.lineTo (fp (b, 0.690f, 0.536f));                  // mouth corner
+    c (0.712f, 0.546f, 0.712f, 0.558f, 0.700f, 0.566f); // lower lip
+    c (0.688f, 0.572f, 0.676f, 0.578f, 0.678f, 0.590f); // chin dip
+    c (0.688f, 0.612f, 0.700f, 0.635f, 0.684f, 0.652f); // chin
+    c (0.655f, 0.680f, 0.610f, 0.690f, 0.580f, 0.690f); // jaw
+    c (0.592f, 0.740f, 0.600f, 0.800f, 0.610f, 0.850f); // throat
+    c (0.700f, 0.890f, 0.850f, 0.920f, 0.950f, 1.000f); // front shoulder
+    p.lineTo (fp (b, 0.950f, 2.000f)); // far below the panel: the bottom edge is never visible
+    p.lineTo (fp (b, 0.100f, 2.000f));
+    p.lineTo (fp (b, 0.100f, 1.000f));
+    c (0.220f, 0.930f, 0.360f, 0.900f, 0.420f, 0.840f); // back shoulder
+    c (0.430f, 0.770f, 0.400f, 0.660f, 0.330f, 0.560f); // nape
+    c (0.250f, 0.450f, 0.250f, 0.220f, 0.360f, 0.150f); // back of the head
+    c (0.420f, 0.110f, 0.470f, 0.100f, 0.520f, 0.100f); // crown
+    p.closeSubPath();
+    return p;
+}
+
+Path IdentityPanel::faceDetails (Rectangle<float> b)
+{
+    Path p;
+    // brow
+    p.startNewSubPath (fp (b, 0.596f, 0.338f));
+    p.quadraticTo (fp (b, 0.625f, 0.322f), fp (b, 0.656f, 0.334f));
+    // closed eye (almond) with lashes
+    p.startNewSubPath (fp (b, 0.606f, 0.380f));
+    p.quadraticTo (fp (b, 0.628f, 0.393f), fp (b, 0.652f, 0.377f));
+    for (int i = 0; i < 4; ++i)
+    {
+        const float x = 0.614f + 0.010f * (float) i;
+        p.startNewSubPath (fp (b, x, 0.388f + (i == 0 || i == 3 ? -0.002f : 0.0f)));
+        p.lineTo (fp (b, x - 0.004f, 0.401f));
+    }
+    // lip parting line
+    p.startNewSubPath (fp (b, 0.672f, 0.534f));
+    p.quadraticTo (fp (b, 0.684f, 0.538f), fp (b, 0.692f, 0.535f));
+    return p;
+}
+
+Path IdentityPanel::hairStrands (Rectangle<float> b)
+{
+    Path p;
+    const int n = 15;
+    for (int i = 0; i < n; ++i)
+    {
+        const float t = (float) i / (float) (n - 1);
+        p.startNewSubPath (fp (b, 0.630f - 0.230f * t, 0.180f - 0.060f * t));
+        p.cubicTo (fp (b, 0.500f - 0.260f * t, 0.040f + 0.020f * t),
+                   fp (b, 0.170f + 0.030f * t, 0.420f + 0.060f * t),
+                   fp (b, 0.420f - 0.260f * t, 0.900f + 0.025f * (float) ((i * 7) % 5))); // staggered ends
+    }
+    return p;
 }
 
 void IdentityPanel::renderBackground()
@@ -414,13 +490,51 @@ void IdentityPanel::renderBackground()
         g.setColour (Colours::white.withAlpha (0.025f));
         for (float yy = r.getY() + 2.0f; yy < r.getBottom(); yy += 4.0f)
             g.fillRect (r.getX(), yy, r.getWidth(), 1.0f);
-        // static thin rings
+        // static thin rings (halo behind the head)
         for (int k = 0; k < 6; ++k)
         {
             const float rr = base * (0.30f + 0.14f * (float) k);
             g.setColour ((k % 2 == 0 ? pal::rose : pal::violet).withAlpha (0.10f - 0.012f * (float) k));
             g.drawEllipse (Rectangle<float> (rr * 2.0f, rr * 2.0f).withCentre (c), 1.0f);
         }
+
+        // original neon profile: hair strands, translucent silhouette, dot mesh, glowing outline and details
+        const auto fb = faceBox();
+        const float lw = jmax (1.0f, fb.getWidth() * 0.004f);
+        const auto silhouette = faceSilhouette (fb);
+        const auto hair = hairStrands (fb);
+        const auto details = faceDetails (fb);
+
+
+        g.setGradientFill (ColourGradient (pal::violetDeep.brighter (0.2f).withAlpha (0.75f), fb.getX() + fb.getWidth() * 0.3f, fb.getY(), pal::rose.darker (0.6f).withAlpha (0.55f), fb.getRight() * 0.95f, fb.getY() + fb.getHeight() * 0.6f, false));
+        g.fillPath (silhouette);
+
+        // dot mesh inside the face: denser light near the front edge (lit from the right)
+        {
+            const float step = jmax (5.0f, fb.getWidth() * 0.018f);
+            const auto sb = silhouette.getBounds();
+            for (float yy = sb.getY() + step * 0.5f; yy < sb.getBottom(); yy += step)
+                for (float xx = sb.getX() + step * 0.5f; xx < sb.getRight(); xx += step)
+                    if (silhouette.contains (xx, yy))
+                    {
+                        const float tx = jlimit (0.0f, 1.0f, (xx - sb.getX()) / sb.getWidth());
+                        g.setColour ((tx > 0.6f ? pal::roseSoft : pal::violet).withAlpha (0.08f + 0.30f * tx * tx));
+                        g.fillEllipse (xx - 0.8f, yy - 0.8f, 1.6f, 1.6f);
+                    }
+        }
+
+        // outline glow (wide, faint) then the bright neon line
+        g.setColour (pal::rose.withAlpha (0.18f));
+        g.strokePath (silhouette, PathStrokeType (lw * 6.0f, PathStrokeType::curved, PathStrokeType::rounded));
+        g.setGradientFill (ColourGradient (pal::violet, fb.getX() + fb.getWidth() * 0.3f, fb.getY() + fb.getHeight() * 0.3f, pal::rose, fb.getX() + fb.getWidth() * 0.72f, fb.getY() + fb.getHeight() * 0.5f, false));
+        g.strokePath (silhouette, PathStrokeType (lw * 1.6f, PathStrokeType::curved, PathStrokeType::rounded));
+        g.setColour (pal::roseSoft.withAlpha (0.9f));
+        g.strokePath (details, PathStrokeType (lw * 1.2f, PathStrokeType::curved, PathStrokeType::rounded));
+        // hair over the back of the head: dark mass, then luminous strands
+        g.setColour (pal::bg.withAlpha (0.35f));
+        g.strokePath (hair, PathStrokeType (lw * 5.0f, PathStrokeType::curved, PathStrokeType::rounded));
+        g.setGradientFill (ColourGradient (pal::roseSoft.withAlpha (0.75f), fb.getX() + fb.getWidth() * 0.6f, fb.getY() + fb.getHeight() * 0.1f, pal::violet.withAlpha (0.35f), fb.getX() + fb.getWidth() * 0.2f, fb.getBottom(), false));
+        g.strokePath (hair, PathStrokeType (lw * 0.9f, PathStrokeType::curved, PathStrokeType::rounded));
     }
 
     // bottom fade so the route selector reads clearly, and a top sheen
@@ -457,15 +571,11 @@ void IdentityPanel::paint (Graphics& g)
     }
     if (! face.isValid())
     {
-        // core: glowing disc with the VS monogram (placeholder until the face artwork is chosen)
-        const float coreR = base * 0.22f;
-        g.setGradientFill (ColourGradient (pal::rose.withAlpha (0.35f + 0.4f * level), c.x, c.y, pal::rose.withAlpha (0.0f), c.x + coreR * 1.8f, c.y, true));
-        g.fillEllipse (Rectangle<float> (coreR * 3.6f, coreR * 3.6f).withCentre (c));
-        g.setGradientFill (ColourGradient (pal::rose, c.x - coreR, c.y - coreR, pal::violet, c.x + coreR, c.y + coreR, false));
-        g.fillEllipse (Rectangle<float> (coreR * 2.0f, coreR * 2.0f).withCentre (c));
-        g.setColour (pal::text);
-        g.setFont (uiFont (coreR * 0.8f, true, 0.04f));
-        g.drawText ("VS", Rectangle<float> (coreR * 2.0f, coreR * 2.0f).withCentre (c), Justification::centred);
+        // the profile's front edge brightens with the voice
+        const auto fb = faceBox();
+        const float lw = jmax (1.0f, fb.getWidth() * 0.004f);
+        g.setColour (pal::rose.withAlpha (0.10f + 0.45f * level));
+        g.strokePath (faceSilhouette (fb), PathStrokeType (lw * (2.0f + 4.0f * level), PathStrokeType::curved, PathStrokeType::rounded));
     }
 }
 

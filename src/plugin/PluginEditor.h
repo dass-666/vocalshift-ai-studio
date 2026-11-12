@@ -91,6 +91,10 @@ public:
 
 private:
     void renderBackground();
+    juce::Rectangle<float> faceBox() const;
+    static juce::Path faceSilhouette (juce::Rectangle<float> box);
+    static juce::Path faceDetails (juce::Rectangle<float> box);   // brow, eye, lashes, ear, lip line
+    static juce::Path hairStrands (juce::Rectangle<float> box);
     juce::Image cache, face;
     float level = 0.0f; // 0..1 smoothed
 };
