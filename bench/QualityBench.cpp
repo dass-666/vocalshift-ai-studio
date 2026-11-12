@@ -8,6 +8,7 @@
 // human voices: use --input with legally usable recordings for real judgements).
 
 #include "../src/plugin/PluginProcessor.h"
+#include "../src/plugin/PluginEditor.h"
 #include "../tests/Signals.h"
 
 #include <core/analysis/PitchDetector.h>
@@ -130,6 +131,47 @@ int main (int argc, char** argv)
             f.deleteFile();
             FileOutputStream os (f);
             PNGImageFormat().writeImageToStream (img, os);
+        }
+        // Easy page at the real pixel density of Windows 100 % and 150 % scaling, and with a voice playing
+        // (1 s of a synthetic vowel through the processor, so meters, halo and the singer's light react).
+        p.getState().state.setProperty (vs::params::propUiMode, "easy", nullptr);
+        auto snap = [&] (const char* name, float scale) {
+            std::unique_ptr<AudioProcessorEditor> ed (p.createEditor());
+            ed->setSize (940, 700);
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, scale);
+            File f = outDir.getChildFile (name);
+            f.deleteFile();
+            FileOutputStream os (f);
+            PNGImageFormat().writeImageToStream (img, os);
+        };
+        snap ("ui_easy_100.png", 1.0f);
+        snap ("ui_easy_150.png", 1.5f);
+        {
+            auto v = vstest::vowel (48000.0, 220.0, 1.0, 0.25f);
+            AudioBuffer<float> buf (2, 512);
+            MidiBuffer midi;
+            for (size_t pos = 0; pos + 512 <= v.size(); pos += 512)
+            {
+                for (int c = 0; c < 2; ++c)
+                    buf.copyFrom (c, 0, v.data() + pos, 512);
+                p.processBlock (buf, midi);
+            }
+        }
+        snap ("ui_easy_voz.png", 2.0f);
+        {
+            std::unique_ptr<AudioProcessorEditor> ed (p.createEditor());
+            ed->setSize (940, 700);
+            for (auto* ch : ed->getChildren())
+                if (auto* id = dynamic_cast<vs::IdentityPanel*> (ch))
+                {
+                    id->createComponentSnapshot (id->getLocalBounds(), true, 1.0f);
+                    auto t0 = std::chrono::steady_clock::now();
+                    for (int i = 0; i < 200; ++i) id->createComponentSnapshot (id->getLocalBounds(), true, 1.0f);
+                    std::printf ("TIMING identity frame (cached): %.3f ms\n", std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count() / 200.0);
+                    t0 = std::chrono::steady_clock::now();
+                    for (int i = 0; i < 20; ++i) { id->setBounds (id->getBounds().withWidth (id->getWidth() + (i % 2 ? 1 : -1))); id->createComponentSnapshot (id->getLocalBounds(), true, 1.0f); }
+                    std::printf ("TIMING identity rebuild (resize): %.3f ms\n", std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count() / 20.0);
+                }
         }
         std::printf ("Capturas en %s\n", outDir.getFullPathName().toRawUTF8());
         return 0;

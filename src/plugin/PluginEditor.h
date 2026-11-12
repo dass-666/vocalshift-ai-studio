@@ -86,16 +86,26 @@ public:
     void setLevel (float linearPeak);
     void setFaceImage (juce::Image img) { face = std::move (img); cache = {}; repaint(); }
     void paint (juce::Graphics&) override;
-    void resized() override { cache = {}; }
+    void resized() override;
     juce::Point<float> ringCentre() const;
 
 private:
+    // Original holographic singer, drawn in code for VocalShift (not traced from any photo or product).
+    // All shapes are authored in a 1000-unit box and mapped to the panel in resized().
+    struct Singer
+    {
+        juce::Path silhouette, frontContour, upperLip, lowerLip, mouth, teeth, brow, eyeLines, jawLine, hairMass;
+        std::vector<juce::Path> strands;
+        std::vector<float> strandWidth, strandAlpha;
+        juce::Point<float> mouthPoint, cheek, eyeSocket, underJaw;
+        float unit = 1.0f; // pixels per design unit
+    };
+    void buildSinger();
+    juce::Point<float> u (float x, float y) const; // design units -> pixels
     void renderBackground();
-    juce::Rectangle<float> faceBox() const;
-    static juce::Path faceSilhouette (juce::Rectangle<float> box);
-    static juce::Path faceDetails (juce::Rectangle<float> box);   // brow, eye, lashes, ear, lip line
-    static juce::Path hairStrands (juce::Rectangle<float> box);
     juce::Image cache, face;
+    Singer singer;
+    juce::AffineTransform toPanel;
     float level = 0.0f; // 0..1 smoothed
 };
 
