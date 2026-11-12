@@ -7,6 +7,10 @@ using namespace juce;
 namespace pal = palette;
 
 static String u8s (const char* s) { return String::fromUTF8 (s); }
+static Font uiFont (float h, bool bold = false, float tracking = 0.0f)
+{
+    return Font (FontOptions (h, bold ? Font::bold : Font::plain).withKerningFactor (tracking));
+}
 
 static constexpr int factoryIdOffset = 1;
 static constexpr int userIdOffset = 1000;
@@ -14,76 +18,201 @@ static constexpr int userIdOffset = 1000;
 // ---------------------------------------------------------------------------
 VsLookAndFeel::VsLookAndFeel()
 {
-    setColour (Slider::rotarySliderFillColourId, pal::blue);
+#if JUCE_WINDOWS
+    setDefaultSansSerifTypefaceName ("Segoe UI"); // system font on Windows 10/11: modern look, no licence to ship
+#endif
+    setColour (ResizableWindow::backgroundColourId, pal::bg);
+    setColour (Slider::rotarySliderFillColourId, pal::rose);
     setColour (Slider::textBoxOutlineColourId, Colours::transparentBlack);
     setColour (Slider::textBoxTextColourId, pal::text);
+    setColour (Slider::textBoxBackgroundColourId, Colours::transparentBlack);
+    setColour (Slider::textBoxHighlightColourId, pal::rose.withAlpha (0.4f));
     setColour (Label::textColourId, pal::text);
+    setColour (TextEditor::backgroundColourId, pal::panelHi);
+    setColour (TextEditor::textColourId, pal::text);
+    setColour (TextEditor::focusedOutlineColourId, pal::rose);
     setColour (ComboBox::backgroundColourId, pal::panelHi);
     setColour (ComboBox::textColourId, pal::text);
-    setColour (ComboBox::outlineColourId, pal::groove);
+    setColour (ComboBox::outlineColourId, pal::panelEdge);
+    setColour (ComboBox::arrowColourId, pal::rose);
     setColour (PopupMenu::backgroundColourId, pal::panel);
     setColour (PopupMenu::textColourId, pal::text);
-    setColour (PopupMenu::highlightedBackgroundColourId, pal::blue.darker (0.3f));
+    setColour (PopupMenu::headerTextColourId, pal::violet);
+    setColour (PopupMenu::highlightedBackgroundColourId, pal::violetDeep);
+    setColour (PopupMenu::highlightedTextColourId, pal::roseSoft);
     setColour (TextButton::buttonColourId, pal::panelHi);
-    setColour (TextButton::textColourOffId, pal::text);
+    setColour (TextButton::textColourOffId, pal::dim);
     setColour (TextButton::textColourOnId, pal::text);
 }
 
-Font VsLookAndFeel::getTextButtonFont (TextButton&, int height) { return FontOptions ((float) jmin (15, height - 8), Font::plain); }
+Font VsLookAndFeel::getTextButtonFont (TextButton& b, int height)
+{
+    return uiFont ((float) jmin (14, height - 10), b.getToggleState(), 0.02f);
+}
 
-void VsLookAndFeel::drawButtonBackground (Graphics& g, Button& b, const Colour& colour, bool highlighted, bool down)
+Font VsLookAndFeel::getComboBoxFont (ComboBox&) { return uiFont (13.5f); }
+
+Label* VsLookAndFeel::createSliderTextBox (Slider& s)
+{
+    auto* l = LookAndFeel_V4::createSliderTextBox (s);
+    l->setFont (uiFont (12.5f, true));
+    l->setColour (Label::textColourId, pal::text);
+    l->setColour (Label::backgroundColourId, Colours::transparentBlack);
+    l->setColour (Label::outlineColourId, Colours::transparentBlack);
+    return l;
+}
+
+void VsLookAndFeel::drawButtonBackground (Graphics& g, Button& b, const Colour&, bool highlighted, bool down)
 {
     auto r = b.getLocalBounds().toFloat().reduced (1.0f);
-    auto c = colour;
-    if (highlighted) c = c.brighter (0.08f);
-    if (down) c = c.darker (0.1f);
-    g.setColour (c);
-    g.fillRoundedRectangle (r, 7.0f);
-    g.setColour (pal::groove.withAlpha (0.8f));
-    g.drawRoundedRectangle (r, 7.0f, 1.0f);
+    const float corner = jmin (r.getHeight() * 0.5f, 14.0f);
+    const bool on = b.getToggleState();
+    if (on)
+    {
+        // active: violet -> rose gradient with a soft neon halo
+        g.setColour (pal::rose.withAlpha (0.16f));
+        g.fillRoundedRectangle (r.expanded (1.0f), corner + 1.0f);
+        g.setGradientFill (ColourGradient (pal::violet.darker (0.35f), r.getX(), r.getY(), pal::rose.darker (0.25f), r.getRight(), r.getBottom(), false));
+        g.fillRoundedRectangle (r, corner);
+        g.setColour (pal::roseSoft.withAlpha (highlighted ? 0.55f : 0.35f));
+        g.drawRoundedRectangle (r, corner, 1.0f);
+    }
+    else
+    {
+        g.setGradientFill (ColourGradient (pal::panelHi.brighter (highlighted ? 0.12f : 0.04f), 0, r.getY(), pal::panelHi.darker (0.25f), 0, r.getBottom(), false));
+        g.fillRoundedRectangle (r, corner);
+        g.setColour (highlighted ? pal::violet.withAlpha (0.5f) : pal::panelEdge.brighter (0.15f));
+        g.drawRoundedRectangle (r, corner, 1.0f);
+    }
+    if (down)
+    {
+        g.setColour (Colours::black.withAlpha (0.18f));
+        g.fillRoundedRectangle (r, corner);
+    }
+}
+
+void VsLookAndFeel::drawButtonText (Graphics& g, TextButton& b, bool highlighted, bool)
+{
+    const bool on = b.getToggleState();
+    g.setFont (getTextButtonFont (b, b.getHeight()));
+    g.setColour (on ? pal::text : (highlighted ? pal::text : pal::dim.brighter (0.15f)));
+    if (! b.isEnabled())
+        g.setColour (pal::dim.withAlpha (0.4f));
+    g.drawFittedText (b.getButtonText(), b.getLocalBounds().reduced (6, 2), Justification::centred, 1, 0.85f);
+}
+
+void VsLookAndFeel::drawComboBox (Graphics& g, int w, int h, bool, int, int, int, int, ComboBox& box)
+{
+    auto r = Rectangle<float> (0, 0, (float) w, (float) h).reduced (1.0f);
+    const float corner = 8.0f;
+    g.setColour (Colours::black.withAlpha (0.35f));
+    g.fillRoundedRectangle (r, corner);
+    g.setColour (box.isMouseOver (true) ? pal::violet.withAlpha (0.5f) : pal::panelEdge.brighter (0.15f));
+    g.drawRoundedRectangle (r, corner, 1.0f);
+    // arrow
+    const float ax = r.getRight() - 18.0f, ay = r.getCentreY();
+    Path p;
+    p.addTriangle (ax - 5.0f, ay - 2.5f, ax + 5.0f, ay - 2.5f, ax, ay + 3.5f);
+    g.setColour (pal::rose);
+    g.fillPath (p);
 }
 
 void VsLookAndFeel::drawRotarySlider (Graphics& g, int x, int y, int w, int h, float pos, float startAngle, float endAngle, Slider& s)
 {
+    const bool big = (bool) s.getProperties().getWithDefault ("vsBig", false);
     const auto bounds = Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
     const float diameter = jmin (bounds.getWidth(), bounds.getHeight());
-    const auto area = bounds.withSizeKeepingCentre (diameter, diameter).reduced (diameter * 0.06f);
+    const auto area = bounds.withSizeKeepingCentre (diameter, diameter).reduced (diameter * (big ? 0.11f : 0.07f));
     const auto centre = area.getCentre();
     const float radius = area.getWidth() * 0.5f;
-    const float ring = jmax (3.0f, radius * 0.11f);
+    const float ring = jmax (3.0f, radius * (big ? 0.075f : 0.10f));
     const auto colour = s.findColour (Slider::rotarySliderFillColourId);
     const bool enabled = s.isEnabled();
-
-    // knob body: soft vertical gradient, subtle rim (depth without reflections)
-    const float bodyR = radius - ring * 1.9f;
-    g.setGradientFill (ColourGradient (pal::panelHi.brighter (0.05f), centre.x, centre.y - bodyR, pal::panel.darker (0.3f), centre.x, centre.y + bodyR, false));
-    g.fillEllipse (centre.x - bodyR, centre.y - bodyR, bodyR * 2, bodyR * 2);
-    g.setColour (Colours::black.withAlpha (0.55f));
-    g.drawEllipse (centre.x - bodyR, centre.y - bodyR, bodyR * 2, bodyR * 2, 1.2f);
-
-    // track + progress arc
     const float arcR = radius - ring * 0.5f;
+    const float angle = startAngle + pos * (endAngle - startAngle);
+    auto pointOn = [&] (float r, float a) { return centre.getPointOnCircumference (r, a); };
+
+    // soft neon halo behind the big knobs
+    if (big && enabled)
+    {
+        const float haloR = radius * 1.12f;
+        g.setGradientFill (ColourGradient (colour.withAlpha (0.20f + 0.10f * pos), centre.x, centre.y, colour.withAlpha (0.0f), centre.x + haloR, centre.y, true));
+        g.fillEllipse (centre.x - haloR, centre.y - haloR, haloR * 2.0f, haloR * 2.0f);
+    }
+
+    // scale ticks around the big knobs
+    if (big)
+    {
+        for (int i = 0; i <= 24; ++i)
+        {
+            const float a = startAngle + (float) i / 24.0f * (endAngle - startAngle);
+            const bool major = i % 6 == 0;
+            const float r0 = radius + ring * 0.6f, r1 = radius + ring * (major ? 1.7f : 1.15f);
+            g.setColour ((a <= angle + 0.001f && enabled ? colour : pal::dim).withAlpha (major ? 0.8f : 0.4f));
+            g.drawLine (Line<float> (pointOn (r0, a), pointOn (r1, a)), major ? 1.4f : 1.0f);
+        }
+    }
+
+    // track + value arc (bipolar parameters grow from zero, e.g. pitch, formants, pan)
     Path track;
     track.addCentredArc (centre.x, centre.y, arcR, arcR, 0.0f, startAngle, endAngle, true);
     g.setColour (pal::groove);
     g.strokePath (track, PathStrokeType (ring, PathStrokeType::curved, PathStrokeType::rounded));
-    const float angle = startAngle + pos * (endAngle - startAngle);
-    Path value;
-    value.addCentredArc (centre.x, centre.y, arcR, arcR, 0.0f, startAngle, angle, true);
-    g.setColour (enabled ? colour : colour.withAlpha (0.25f));
-    g.strokePath (value, PathStrokeType (ring, PathStrokeType::curved, PathStrokeType::rounded));
-    if (enabled && s.isMouseOverOrDragging())
+
+    const bool bipolar = s.getMinimum() < 0.0 && s.getMaximum() > 0.0;
+    const float zeroAngle = bipolar ? startAngle + (float) s.valueToProportionOfLength (0.0) * (endAngle - startAngle) : startAngle;
+    const float a0 = jmin (zeroAngle, angle), a1 = jmax (zeroAngle, angle);
+    if (a1 - a0 > 0.001f)
     {
-        g.setColour (colour.withAlpha (0.18f));
-        g.strokePath (value, PathStrokeType (ring * 2.2f, PathStrokeType::curved, PathStrokeType::rounded));
+        Path value;
+        value.addCentredArc (centre.x, centre.y, arcR, arcR, 0.0f, a0, a1, true);
+        const auto c0 = enabled ? pal::violet : pal::dim.withAlpha (0.3f);
+        const auto c1 = enabled ? colour : pal::dim.withAlpha (0.3f);
+        const auto p0 = pointOn (arcR, startAngle), p1 = pointOn (arcR, endAngle);
+        if (enabled)
+        {
+            g.setGradientFill (ColourGradient (c0.withAlpha (0.22f), p0.x, p0.y, c1.withAlpha (0.30f), p1.x, p1.y, false));
+            g.strokePath (value, PathStrokeType (ring * (s.isMouseOverOrDragging() ? 2.8f : 2.2f), PathStrokeType::curved, PathStrokeType::rounded));
+        }
+        g.setGradientFill (ColourGradient (c0, p0.x, p0.y, c1, p1.x, p1.y, false));
+        g.strokePath (value, PathStrokeType (ring, PathStrokeType::curved, PathStrokeType::rounded));
     }
 
-    // pointer
-    Path pointer;
-    const float pl = bodyR * 0.62f;
-    pointer.addRoundedRectangle (-1.8f, -bodyR + 4.0f, 3.6f, pl, 1.8f);
-    g.setColour (enabled ? pal::text : pal::dim);
-    g.fillPath (pointer, AffineTransform::rotation (angle).translated (centre.x, centre.y));
+    // knob body: drop shadow, dark metal radial gradient, lit rim
+    const float bodyR = radius - ring * 2.0f;
+    auto body = Rectangle<float> (bodyR * 2.0f, bodyR * 2.0f).withCentre (centre);
+    g.setColour (Colours::black.withAlpha (0.55f));
+    g.fillEllipse (body.translated (0.0f, bodyR * 0.06f).expanded (bodyR * 0.04f));
+    g.setGradientFill (ColourGradient (Colour (0xff3b3150), centre.x - bodyR * 0.45f, centre.y - bodyR * 0.55f,
+                                       Colour (0xff0d0a15), centre.x + bodyR * 0.55f, centre.y + bodyR * 0.85f, true));
+    g.fillEllipse (body);
+    g.setGradientFill (ColourGradient (Colours::white.withAlpha (0.22f), centre.x, body.getY(), Colours::black.withAlpha (0.5f), centre.x, body.getBottom(), false));
+    g.drawEllipse (body.reduced (0.6f), 1.2f);
+
+    if (big)
+    {
+        // recessed display disc with the value
+        const float discR = bodyR * 0.66f;
+        auto disc = Rectangle<float> (discR * 2.0f, discR * 2.0f).withCentre (centre);
+        g.setGradientFill (ColourGradient (Colour (0xff0b0912), centre.x, disc.getY(), Colour (0xff1a1426), centre.x, disc.getBottom(), false));
+        g.fillEllipse (disc);
+        g.setColour (colour.withAlpha (enabled ? 0.35f : 0.12f));
+        g.drawEllipse (disc, 1.0f);
+        g.setColour (enabled ? pal::text : pal::dim);
+        g.setFont (uiFont (jlimit (11.0f, 26.0f, discR * 0.42f), true));
+        g.drawFittedText (s.getTextFromValue (s.getValue()), disc.reduced (discR * 0.12f, 0.0f).toNearestInt(), Justification::centred, 1, 0.7f);
+    }
+
+    // pointer: a lit dot on the body edge
+    const float dotR = jmax (2.0f, ring * (big ? 0.55f : 0.45f));
+    const auto dot = pointOn (bodyR - dotR * 2.2f, angle);
+    if (enabled)
+    {
+        g.setColour (colour.withAlpha (0.35f));
+        g.fillEllipse (Rectangle<float> (dotR * 4.0f, dotR * 4.0f).withCentre (dot));
+    }
+    g.setColour (enabled ? pal::roseSoft : pal::dim);
+    g.fillEllipse (Rectangle<float> (dotR * 2.0f, dotR * 2.0f).withCentre (dot));
 }
 
 void VsLookAndFeel::drawLinearSlider (Graphics& g, int x, int y, int w, int h, float pos, float, float, Slider::SliderStyle style, Slider& s)
@@ -94,53 +223,72 @@ void VsLookAndFeel::drawLinearSlider (Graphics& g, int x, int y, int w, int h, f
         return;
     }
     const auto colour = s.findColour (Slider::rotarySliderFillColourId);
-    const float cx = (float) x + (float) w * 0.5f;
-    const float grooveW = 8.0f;
-    const float top = (float) y + 6.0f, bottom = (float) (y + h) - 6.0f;
+    const float cx = (float) x + (float) w * 0.38f;
+    const float grooveW = 6.0f;
+    const float top = (float) y + 8.0f, bottom = (float) (y + h) - 8.0f;
     auto groove = Rectangle<float> (cx - grooveW * 0.5f, top, grooveW, bottom - top);
 
     // dB scale: ticks drawn at fixed dB values converted through the slider's own mapping
-    g.setFont (FontOptions (10.5f));
+    g.setFont (uiFont (10.5f));
     for (double db : { 6.0, 0.0, -12.0, -24.0, -36.0, -60.0 })
     {
         const float p = (float) s.valueToProportionOfLength (db);
         const float ty = bottom - p * (bottom - top);
         const bool major = db == 0.0 || db == -12.0 || db == -60.0;
         g.setColour (db == -12.0 ? colour.withAlpha (0.9f) : pal::dim.withAlpha (major ? 0.9f : 0.55f));
-        g.drawLine (cx + grooveW * 0.5f + 5.0f, ty, cx + grooveW * 0.5f + (major ? 14.0f : 10.0f), ty, 1.0f);
+        g.drawLine (cx + grooveW * 0.5f + 12.0f, ty, cx + grooveW * 0.5f + (major ? 20.0f : 16.0f), ty, 1.0f);
         const String label = db <= -60.0 ? String::fromUTF8 ("−∞") : (db > 0 ? "+" : (db < 0 ? String::fromUTF8 ("−") : String())) + String ((int) std::abs (db));
-        g.drawText (label, Rectangle<float> (cx + grooveW * 0.5f + 16.0f, ty - 7.0f, 30.0f, 14.0f), Justification::centredLeft);
+        g.drawText (label, Rectangle<float> (cx + grooveW * 0.5f + 22.0f, ty - 7.0f, 30.0f, 14.0f), Justification::centredLeft);
     }
 
+    g.setColour (Colours::black.withAlpha (0.5f));
+    g.fillRoundedRectangle (groove.expanded (1.5f), grooveW);
     g.setColour (pal::groove);
     g.fillRoundedRectangle (groove, grooveW * 0.5f);
     auto filled = groove.withTop (pos);
     const bool hot = s.getValue() > 0.0;
-    g.setGradientFill (ColourGradient (hot ? pal::amber : colour.brighter (0.2f), 0, filled.getY(), colour.darker (0.4f), 0, filled.getBottom(), false));
+    g.setGradientFill (ColourGradient (hot ? pal::warn : colour, 0, filled.getY(), pal::violet.darker (0.2f), 0, filled.getBottom(), false));
     g.fillRoundedRectangle (filled, grooveW * 0.5f);
+    g.setColour ((hot ? pal::warn : colour).withAlpha (0.18f));
+    g.fillRoundedRectangle (filled.expanded (3.0f, 0.0f), grooveW);
 
-    // handle
-    auto handle = Rectangle<float> (cx - 17.0f, pos - 9.0f, 34.0f, 18.0f);
-    g.setGradientFill (ColourGradient (pal::panelHi.brighter (0.25f), 0, handle.getY(), pal::panel, 0, handle.getBottom(), false));
+    // hardware-style handle
+    auto handle = Rectangle<float> (cx - 18.0f, pos - 10.0f, 36.0f, 20.0f);
+    g.setColour (Colours::black.withAlpha (0.5f));
+    g.fillRoundedRectangle (handle.translated (0.0f, 2.0f), 5.0f);
+    g.setGradientFill (ColourGradient (Colour (0xff3b3150), 0, handle.getY(), Colour (0xff120e1b), 0, handle.getBottom(), false));
     g.fillRoundedRectangle (handle, 5.0f);
-    g.setColour (Colours::black.withAlpha (0.6f));
-    g.drawRoundedRectangle (handle, 5.0f, 1.2f);
-    g.setColour (hot ? pal::amber : colour);
-    g.fillRoundedRectangle (handle.withSizeKeepingCentre (22.0f, 2.5f), 1.2f);
+    g.setColour (Colours::white.withAlpha (0.12f));
+    g.drawRoundedRectangle (handle.reduced (0.5f), 5.0f, 1.0f);
+    const auto line = handle.withSizeKeepingCentre (24.0f, 2.5f);
+    g.setColour ((hot ? pal::warn : colour).withAlpha (0.4f));
+    g.fillRoundedRectangle (line.expanded (2.0f), 2.5f);
+    g.setColour (hot ? pal::warn : pal::roseSoft);
+    g.fillRoundedRectangle (line, 1.2f);
 }
 
 void VsLookAndFeel::drawToggleButton (Graphics& g, ToggleButton& b, bool highlighted, bool)
 {
     auto r = b.getLocalBounds().toFloat();
-    const auto sw = r.removeFromLeft (34.0f).withSizeKeepingCentre (30.0f, 16.0f);
+    const auto sw = r.removeFromLeft (38.0f).withSizeKeepingCentre (32.0f, 16.0f);
     const bool on = b.getToggleState();
-    g.setColour (on ? pal::teal.withAlpha (0.85f) : pal::groove);
+    const bool enabled = b.isEnabled();
+    if (on && enabled)
+    {
+        g.setColour (pal::rose.withAlpha (0.22f));
+        g.fillRoundedRectangle (sw.expanded (2.5f), 10.0f);
+        g.setGradientFill (ColourGradient (pal::violet, sw.getX(), 0, pal::rose, sw.getRight(), 0, false));
+    }
+    else
+        g.setColour (on ? pal::dim.withAlpha (0.35f) : pal::groove);
     g.fillRoundedRectangle (sw, 8.0f);
-    g.setColour (pal::text);
+    g.setColour (pal::panelEdge.brighter (0.2f));
+    if (! on) g.drawRoundedRectangle (sw, 8.0f, 1.0f);
+    g.setColour (enabled ? pal::text : pal::dim);
     g.fillEllipse (sw.getX() + (on ? sw.getWidth() - 14.0f : 2.0f), sw.getY() + 2.0f, 12.0f, 12.0f);
-    g.setColour (highlighted ? pal::text : pal::dim.brighter (0.3f));
-    g.setFont (FontOptions (12.5f));
-    g.drawFittedText (b.getButtonText(), r.toNearestInt().withTrimmedLeft (6), Justification::centredLeft, 2);
+    g.setColour (! enabled ? pal::dim.withAlpha (0.45f) : (highlighted || on ? pal::text : pal::dim.brighter (0.2f)));
+    g.setFont (uiFont (12.5f));
+    g.drawFittedText (b.getButtonText(), r.toNearestInt().withTrimmedLeft (4), Justification::centredLeft, 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -159,32 +307,165 @@ void MeterBar::paint (Graphics& g)
 {
     auto r = getLocalBounds().toFloat();
     const float norm = jlimit (0.0f, 1.0f, (displayDb + 60.0f) / 60.0f);
-    auto fillColour = [&] { return displayDb > -1.0f ? pal::red : (displayDb > -12.0f ? pal::amber : pal::teal); };
-    g.setFont (FontOptions (10.5f, Font::bold));
+    auto segColour = [] (float segDb) { return segDb > -3.0f ? pal::warn : (segDb > -18.0f ? pal::rose : pal::violet); };
+    g.setFont (uiFont (10.5f, true, 0.06f));
+
     if (horizontal)
     {
         auto lab = r.removeFromLeft (30.0f);
         g.setColour (pal::dim);
         g.drawText (label, lab, Justification::centredLeft);
-        auto led = r.removeFromRight (30.0f).reduced (4.0f, 5.0f);
+        auto led = r.removeFromRight (12.0f).reduced (0.0f, 4.0f);
         g.setColour (clipped ? pal::red : pal::groove);
-        g.fillRoundedRectangle (led, 3.0f);
-        auto bar = r.reduced (0.0f, 6.0f);
-        g.setColour (pal::groove);
-        g.fillRoundedRectangle (bar, 3.0f);
-        g.setColour (fillColour());
-        g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * norm), 3.0f);
+        g.fillRoundedRectangle (led, 2.0f);
+        r.removeFromRight (4.0f);
+        auto bar = r.reduced (0.0f, 4.0f);
+        const int n = jmax (8, (int) (bar.getWidth() / 4.0f));
+        const float sw = bar.getWidth() / (float) n;
+        for (int i = 0; i < n; ++i)
+        {
+            const float p = ((float) i + 0.5f) / (float) n;
+            g.setColour (p <= norm ? segColour (-60.0f + 60.0f * p) : pal::groove);
+            g.fillRect (Rectangle<float> (bar.getX() + (float) i * sw, bar.getY(), sw - 1.0f, bar.getHeight()));
+        }
+        return;
+    }
+
+    auto labelArea = r.removeFromBottom (16.0f);
+    g.setColour (pal::dim);
+    g.drawText (label, labelArea, Justification::centred);
+    r.removeFromBottom (4.0f);
+    auto bar = r.withSizeKeepingCentre (jmin (r.getWidth(), 12.0f), r.getHeight());
+    auto led = bar.removeFromTop (7.0f);
+    if (clipped)
+    {
+        g.setColour (pal::red.withAlpha (0.35f));
+        g.fillRoundedRectangle (led.expanded (2.0f), 3.0f);
+    }
+    g.setColour (clipped ? pal::red : pal::groove);
+    g.fillRoundedRectangle (led, 2.0f);
+    bar.removeFromTop (3.0f);
+    g.setColour (Colours::black.withAlpha (0.45f));
+    g.fillRoundedRectangle (bar.expanded (2.0f), 3.0f);
+    const int n = jmax (8, (int) (bar.getHeight() / 4.0f));
+    const float sh = bar.getHeight() / (float) n;
+    for (int i = 0; i < n; ++i)
+    {
+        const float p = ((float) i + 0.5f) / (float) n;
+        const bool lit = p <= norm;
+        auto seg = Rectangle<float> (bar.getX(), bar.getBottom() - (float) (i + 1) * sh, bar.getWidth(), sh - 1.0f);
+        g.setColour (lit ? segColour (-60.0f + 60.0f * p) : pal::groove);
+        g.fillRect (seg);
+    }
+}
+
+// ---------------------------------------------------------------------------
+void IdentityPanel::setLevel (float linearPeak)
+{
+    const float db = linearPeak > 0.0f ? Decibels::gainToDecibels (linearPeak) : -100.0f;
+    const float target = jlimit (0.0f, 1.0f, (db + 48.0f) / 48.0f);
+    const float next = target > level ? level + 0.5f * (target - level) : level * 0.9f;
+    if (std::abs (next - level) > 0.003f)
+    {
+        level = next;
+        repaint();
+    }
+}
+
+Point<float> IdentityPanel::ringCentre() const
+{
+    return { (float) getWidth() * 0.5f, (float) getHeight() * 0.43f };
+}
+
+void IdentityPanel::renderBackground()
+{
+    const float scale = jmax (1.0f, Component::getApproximateScaleFactorForComponent (this));
+    const int w = getWidth(), h = getHeight();
+    cache = Image (Image::ARGB, jmax (1, roundToInt ((float) w * scale)), jmax (1, roundToInt ((float) h * scale)), true);
+    Graphics g (cache);
+    g.addTransform (AffineTransform::scale (scale));
+
+    const auto r = getLocalBounds().toFloat();
+    const float corner = 12.0f;
+    Path shape;
+    shape.addRoundedRectangle (r.reduced (0.5f), corner);
+    g.saveState();
+    g.reduceClipRegion (shape);
+
+    g.setGradientFill (ColourGradient (pal::violetDeep, 0, 0, pal::bg, 0, r.getBottom(), false));
+    g.fillRect (r);
+
+    const auto c = ringCentre();
+    const float base = jmin (r.getWidth(), r.getHeight()) * 0.46f;
+    if (face.isValid())
+    {
+        g.drawImage (face, r, RectanglePlacement::centred | RectanglePlacement::fillDestination);
     }
     else
     {
-        auto labelArea = r.removeFromBottom (16.0f);
-        g.setColour (pal::dim);
-        g.drawText (label, labelArea, Justification::centred);
-        r = r.reduced (4.0f, 2.0f);
-        g.setColour (pal::groove);
-        g.fillRoundedRectangle (r, 3.0f);
-        g.setColour (fillColour());
-        g.fillRoundedRectangle (r.withTop (r.getBottom() - r.getHeight() * norm), 3.0f);
+        // coloured side lighting (violet from the left, rose from the right) and a rose core glow
+        g.setGradientFill (ColourGradient (pal::violet.withAlpha (0.38f), r.getX(), r.getHeight() * 0.25f, pal::violet.withAlpha (0.0f), r.getX() + r.getWidth() * 0.55f, r.getHeight() * 0.25f, true));
+        g.fillRect (r);
+        g.setGradientFill (ColourGradient (pal::rose.withAlpha (0.30f), r.getRight(), r.getHeight() * 0.65f, pal::rose.withAlpha (0.0f), r.getRight() - r.getWidth() * 0.6f, r.getHeight() * 0.65f, true));
+        g.fillRect (r);
+        g.setGradientFill (ColourGradient (pal::rose.withAlpha (0.28f), c.x, c.y, pal::rose.withAlpha (0.0f), c.x + base * 1.1f, c.y, true));
+        g.fillRect (r);
+        // fine scan lines for a technological texture
+        g.setColour (Colours::white.withAlpha (0.025f));
+        for (float yy = r.getY() + 2.0f; yy < r.getBottom(); yy += 4.0f)
+            g.fillRect (r.getX(), yy, r.getWidth(), 1.0f);
+        // static thin rings
+        for (int k = 0; k < 6; ++k)
+        {
+            const float rr = base * (0.30f + 0.14f * (float) k);
+            g.setColour ((k % 2 == 0 ? pal::rose : pal::violet).withAlpha (0.10f - 0.012f * (float) k));
+            g.drawEllipse (Rectangle<float> (rr * 2.0f, rr * 2.0f).withCentre (c), 1.0f);
+        }
+    }
+
+    // bottom fade so the route selector reads clearly, and a top sheen
+    g.setGradientFill (ColourGradient (pal::bg.withAlpha (0.0f), 0, r.getHeight() * 0.62f, pal::bg.withAlpha (0.9f), 0, r.getBottom(), false));
+    g.fillRect (r);
+    g.setGradientFill (ColourGradient (Colours::white.withAlpha (0.06f), 0, 0, Colours::white.withAlpha (0.0f), 0, 40.0f, false));
+    g.fillRect (r.withHeight (40.0f));
+    g.restoreState();
+
+    g.setColour (pal::panelEdge.brighter (0.1f));
+    g.drawRoundedRectangle (r.reduced (0.5f), corner, 1.0f);
+}
+
+void IdentityPanel::paint (Graphics& g)
+{
+    if (getWidth() <= 0 || getHeight() <= 0)
+        return;
+    if (! cache.isValid())
+        renderBackground();
+    g.drawImage (cache, getLocalBounds().toFloat());
+
+    // animated rings: they open and brighten with the output level
+    const auto c = ringCentre();
+    const float base = jmin ((float) getWidth(), (float) getHeight()) * 0.46f;
+    for (int k = 0; k < 4; ++k)
+    {
+        const float rr = base * (0.30f + 0.17f * (float) k) + level * base * 0.07f * (float) (k + 1) * 0.5f;
+        const float a = (0.14f + 0.5f * level) * (1.0f - 0.22f * (float) k);
+        const auto col = k % 2 == 0 ? pal::rose : pal::violet;
+        g.setColour (col.withAlpha (a * 0.35f));
+        g.drawEllipse (Rectangle<float> (rr * 2.0f, rr * 2.0f).withCentre (c), 4.0f);
+        g.setColour (col.withAlpha (a));
+        g.drawEllipse (Rectangle<float> (rr * 2.0f, rr * 2.0f).withCentre (c), 1.3f);
+    }
+    if (! face.isValid())
+    {
+        // core: glowing disc with the VS monogram (placeholder until the face artwork is chosen)
+        const float coreR = base * 0.22f;
+        g.setGradientFill (ColourGradient (pal::rose.withAlpha (0.35f + 0.4f * level), c.x, c.y, pal::rose.withAlpha (0.0f), c.x + coreR * 1.8f, c.y, true));
+        g.fillEllipse (Rectangle<float> (coreR * 3.6f, coreR * 3.6f).withCentre (c));
+        g.setGradientFill (ColourGradient (pal::rose, c.x - coreR, c.y - coreR, pal::violet, c.x + coreR, c.y + coreR, false));
+        g.fillEllipse (Rectangle<float> (coreR * 2.0f, coreR * 2.0f).withCentre (c));
+        g.setColour (pal::text);
+        g.setFont (uiFont (coreR * 0.8f, true, 0.04f));
+        g.drawText ("VS", Rectangle<float> (coreR * 2.0f, coreR * 2.0f).withCentre (c), Justification::centred);
     }
 }
 
@@ -194,16 +475,20 @@ VocalShiftEditor::VocalShiftEditor (VocalShiftProcessor& p)
 {
     setLookAndFeel (&look);
 
-    title.setText ("VocalShift AI Studio", dontSendNotification);
-    title.setFont (FontOptions (21.0f, Font::bold));
-    subtitle.setText (u8s ("v" VS_VERSION_STRING " · DSP, sin IA neuronal"), dontSendNotification);
-    subtitle.setColour (Label::textColourId, pal::dim);
-    subtitle.setFont (FontOptions (12.0f));
-    addAndMakeVisible (title);
-    addAndMakeVisible (subtitle);
+    title.setText ("VOCALSHIFT", dontSendNotification);
+    title.setFont (uiFont (23.0f, true, 0.12f));
+    subtitle.setText (u8s ("AI STUDIO  ·  v" VS_VERSION_STRING "  ·  DSP, sin IA neuronal"), dontSendNotification);
+    subtitle.setColour (Label::textColourId, pal::rose);
+    subtitle.setFont (uiFont (10.5f, true, 0.14f));
+    for (auto* l : { &title, &subtitle })
+    {
+        l->setBorderSize ({});
+        l->setInterceptsMouseClicks (false, false);
+        addAndMakeVisible (l);
+    }
 
-    easyTab.setButtonText (u8s ("Fácil"));
-    proTab.setButtonText ("Pro");
+    easyTab.setButtonText (u8s ("FÁCIL"));
+    proTab.setButtonText ("PRO");
     addAndMakeVisible (easyTab);
     addAndMakeVisible (proTab);
     easyTab.onClick = [this] { setUiMode (false); };
@@ -214,6 +499,7 @@ VocalShiftEditor::VocalShiftEditor (VocalShiftProcessor& p)
     addAndMakeVisible (bypassButton);
 
     presetBox.setTextWhenNothingSelected ("Preset");
+    presetBox.setJustificationType (Justification::centred);
     presetBox.onChange = [this] { onPresetChosen(); };
     addAndMakeVisible (presetBox);
     saveButton.setButtonText ("Guardar");
@@ -223,71 +509,81 @@ VocalShiftEditor::VocalShiftEditor (VocalShiftProcessor& p)
     addAndMakeVisible (saveButton);
     addAndMakeVisible (loadButton);
 
-    identityButton.setButtonText ("Conservar identidad");
-    radicalButton.setButtonText (u8s ("Transformación radical"));
+    identityButton.setButtonText ("Identidad");
+    radicalButton.setButtonText ("Radical");
+    identityButton.setTooltip ("Conservar identidad: los formantes se mantienen cerca de los originales.");
+    radicalButton.setTooltip (u8s ("Transformación radical: los formantes siguen más al tono."));
     identityButton.onClick = [this] { setVoiceMode (VoiceMode::keepIdentity); };
     radicalButton.onClick = [this] { setVoiceMode (VoiceMode::radical); };
     transformButton.setButtonText ("Transformar");
     secondVoiceButton.setButtonText ("Segunda voz");
     transformButton.onClick = [this] { setRoute (VoiceRoute::transform); };
     secondVoiceButton.onClick = [this] { setRoute (VoiceRoute::secondVoice); };
+    pitchDownButton.setButtonText (u8s ("−12"));
+    pitchUpButton.setButtonText ("+12");
+    pitchDownButton.onClick = [this] { nudgePitch (-12.0f); };
+    pitchUpButton.onClick = [this] { nudgePitch (12.0f); };
+    addChildComponent (identity);
     for (auto* b : { &identityButton, &radicalButton, &transformButton, &secondVoiceButton })
         addAndMakeVisible (b);
+    addChildComponent (pitchDownButton);
+    addChildComponent (pitchUpButton);
     modeDescription.setColour (Label::textColourId, pal::dim);
-    modeDescription.setFont (FontOptions (12.5f));
-    modeDescription.setJustificationType (Justification::centredLeft);
+    modeDescription.setFont (uiFont (12.0f));
+    modeDescription.setJustificationType (Justification::topLeft);
     addAndMakeVisible (modeDescription);
     status.setColour (Label::textColourId, pal::dim);
-    status.setFont (FontOptions (12.0f));
+    status.setFont (uiFont (11.5f));
     status.setJustificationType (Justification::centredLeft);
     addAndMakeVisible (status);
 
     // The three macros
-    setupKnob (pitchKnob, "PITCH", u8s ("Altura de la segunda voz (semitonos)."), params::semitones, true, pal::blue);
+    setupKnob (pitchKnob, "PITCH", u8s ("Altura de la voz procesada (semitonos)."), params::semitones, true, pal::rose);
     setupKnob (characterKnob, u8s ("CARÁCTER"), u8s ("Cuerpo, presencia, color y textura."), params::character, true, pal::violet);
-    setupKnob (magicKnob, "MAGIA", u8s ("Espacio y acabado: anchura, reverb, eco."), params::magic, true, pal::teal);
+    setupKnob (magicKnob, "MAGIA", u8s ("Espacio y acabado: anchura, reverb, eco."), params::magic, true, pal::rose);
 
     // Fader
     fader.setSliderStyle (Slider::LinearVertical);
-    fader.setTextBoxStyle (Slider::TextBoxBelow, false, 96, 24);
-    fader.setColour (Slider::rotarySliderFillColourId, pal::teal);
+    fader.setTextBoxStyle (Slider::TextBoxBelow, false, 80, 22);
+    fader.setColour (Slider::rotarySliderFillColourId, pal::rose);
     fader.setColour (Slider::textBoxTextColourId, pal::text);
     fader.setColour (Slider::textBoxOutlineColourId, Colours::transparentBlack);
-    fader.setColour (Slider::textBoxBackgroundColourId, pal::panelHi.withAlpha (0.7f));
+    fader.setColour (Slider::textBoxBackgroundColourId, Colours::black.withAlpha (0.3f));
     faderAttachment = std::make_unique<SliderAttachment> (state, params::secondGain, fader);
     fader.setDoubleClickReturnValue (true, -12.0);
     fader.onDoubleClickReset = [this] { return restoreFaderToPreset(); };
-    faderLabel.setText (u8s ("SEGUNDA VOZ"), dontSendNotification);
+    faderLabel.setText (u8s ("2.ª VOZ"), dontSendNotification);
     faderLabel.setJustificationType (Justification::centred);
-    faderLabel.setFont (FontOptions (13.0f, Font::bold));
+    faderLabel.setFont (uiFont (11.5f, true, 0.1f));
+    faderLabel.setColour (Label::textColourId, pal::dim.brighter (0.3f));
     addChildComponent (fader);
     addChildComponent (faderLabel);
     addChildComponent (secondMeter);
 
     // Pro
-    setupKnob (proFine, "Ajuste fino", {}, params::fineCents, false, pal::blue);
+    setupKnob (proFine, "Ajuste fino", {}, params::fineCents, false, pal::rose);
     setupKnob (proFormant, "Formantes", {}, params::formantShift, false, pal::violet);
     setupKnob (proBrightness, "Brillo", {}, params::brightness, false, pal::violet);
-    setupKnob (proWidth, "Anchura", {}, params::spaceWidth, false, pal::teal);
-    setupKnob (proReverb, "Reverb", {}, params::spaceReverb, false, pal::teal);
-    setupKnob (proDelay, "Eco corto", {}, params::spaceDelay, false, pal::teal);
-    setupKnob (proMix, "Mezcla", {}, params::mix, false, pal::blue);
-    setupKnob (proPan, u8s ("Pan 2.ª voz"), {}, params::pan, false, pal::blue);
-    setupKnob (proOffset, u8s ("Desfase"), {}, params::offsetMs, false, pal::blue);
-    setupKnob (proGain, "Ganancia salida", {}, params::outputGain, false, pal::blue);
+    setupKnob (proWidth, "Anchura", {}, params::spaceWidth, false, pal::rose);
+    setupKnob (proReverb, "Reverb", {}, params::spaceReverb, false, pal::rose);
+    setupKnob (proDelay, "Eco corto", {}, params::spaceDelay, false, pal::rose);
+    setupKnob (proMix, "Mezcla", {}, params::mix, false, pal::violet);
+    setupKnob (proPan, u8s ("Pan 2.ª voz"), {}, params::pan, false, pal::violet);
+    setupKnob (proOffset, u8s ("Desfase"), {}, params::offsetMs, false, pal::violet);
+    setupKnob (proGain, "Ganancia salida", {}, params::outputGain, false, pal::violet);
     setupToggle (autoLevelButton, autoLevelAttachment, u8s ("Nivel automático"), params::autoLevel);
     setupToggle (safetyButton, safetyAttachment, u8s ("Protección de picos"), params::safetyClip);
-    setupToggle (spatialButton, spatialAttachment, u8s ("Procesamiento espacial"), params::spatial);
+    setupToggle (spatialButton, spatialAttachment, u8s ("Espacio (2.ª voz)"), params::spatial);
     setupToggle (improvedButton, improvedAttachment, u8s ("DSP mejorado (apagado = versiones anteriores)"), params::improved);
     setupToggle (engineButton, engineAttachment, u8s ("Motor experimental PSOLA (sin validar al oído)"), params::engine);
     engineInfo.setColour (Label::textColourId, pal::dim);
-    engineInfo.setFont (FontOptions (12.0f));
+    engineInfo.setFont (uiFont (12.0f));
     engineInfo.setJustificationType (Justification::topLeft);
     addChildComponent (engineInfo);
 
     roadmap.setText (u8s ("Pendiente (sin controles): IA neuronal · Armonías · Edición por frases · Modo Live de baja latencia"), dontSendNotification);
-    roadmap.setColour (Label::textColourId, pal::dim.withAlpha (0.7f));
-    roadmap.setFont (FontOptions (11.0f));
+    roadmap.setColour (Label::textColourId, pal::dim.withAlpha (0.6f));
+    roadmap.setFont (uiFont (10.5f));
     addAndMakeVisible (roadmap);
 
     for (auto* m : { &inMeter, &outMeter })
@@ -322,21 +618,29 @@ VocalShiftEditor::~VocalShiftEditor()
 
 void VocalShiftEditor::setupKnob (Knob& k, const String& text, const String& hint, const char* paramId, bool big, Colour colour)
 {
-    k.slider.setTextBoxStyle (Slider::TextBoxBelow, false, 96, big ? 24 : 20);
+    k.slider.getProperties().set ("vsBig", big);
+    if (big)
+        k.slider.setTextBoxStyle (Slider::NoTextBox, false, 0, 0); // the value is drawn inside the knob
+    else
+        k.slider.setTextBoxStyle (Slider::TextBoxBelow, false, 80, 18);
     k.slider.setColour (Slider::rotarySliderFillColourId, colour);
     k.slider.setColour (Slider::textBoxOutlineColourId, Colours::transparentBlack);
-    k.slider.setColour (Slider::textBoxBackgroundColourId, pal::panelHi.withAlpha (0.7f));
+    k.slider.setColour (Slider::textBoxBackgroundColourId, Colours::black.withAlpha (0.28f));
+    k.slider.setColour (Slider::textBoxTextColourId, pal::text);
     k.slider.setRotaryParameters (degreesToRadians (225.0f), degreesToRadians (495.0f), true);
     k.slider.setVelocityBasedMode (false);
     k.slider.setScrollWheelEnabled (true);
+    k.slider.setPopupDisplayEnabled (big, false, this);
     k.label.setText (text, dontSendNotification);
     k.label.setJustificationType (Justification::centred);
-    k.label.setFont (big ? FontOptions (17.0f, Font::bold) : FontOptions (12.5f, Font::plain));
-    k.label.setColour (Label::textColourId, big ? pal::text : pal::dim.brighter (0.4f));
+    k.label.setFont (big ? uiFont (13.5f, true, 0.12f) : uiFont (11.5f, false, 0.03f));
+    k.label.setColour (Label::textColourId, big ? pal::text : pal::dim.brighter (0.35f));
+    k.label.setInterceptsMouseClicks (false, false);
     k.hint.setText (hint, dontSendNotification);
     k.hint.setJustificationType (Justification::centredTop);
     k.hint.setColour (Label::textColourId, pal::dim);
-    k.hint.setFont (FontOptions (12.0f));
+    k.hint.setFont (uiFont (11.5f));
+    k.hint.setInterceptsMouseClicks (false, false);
     addChildComponent (k.slider);
     addChildComponent (k.label);
     addChildComponent (k.hint);
@@ -348,6 +652,17 @@ void VocalShiftEditor::setupToggle (ToggleButton& b, std::unique_ptr<ButtonAttac
     b.setButtonText (text);
     att = std::make_unique<ButtonAttachment> (state, paramId, b);
     addChildComponent (b);
+}
+
+void VocalShiftEditor::nudgePitch (float semis)
+{
+    if (auto* param = state.getParameter (params::semitones))
+    {
+        const float now = state.getRawParameterValue (params::semitones)->load();
+        param->beginChangeGesture();
+        param->setValueNotifyingHost (param->convertTo0to1 (jlimit (-24.0f, 24.0f, now + semis)));
+        param->endChangeGesture();
+    }
 }
 
 VoiceMode VocalShiftEditor::voiceMode() const
@@ -403,12 +718,11 @@ void VocalShiftEditor::refreshModeButtons()
 {
     const bool radical = shownVoiceMode == VoiceMode::radical;
     const bool second = shownRoute == VoiceRoute::secondVoice;
-    auto on = [] (Colour c) { return c.darker (0.25f); };
-    identityButton.setColour (TextButton::buttonColourId, radical ? pal::panelHi : on (pal::blue));
-    radicalButton.setColour (TextButton::buttonColourId, radical ? on (pal::violet) : pal::panelHi);
-    transformButton.setColour (TextButton::buttonColourId, second ? pal::panelHi : on (pal::blue));
-    secondVoiceButton.setColour (TextButton::buttonColourId, second ? on (pal::teal) : pal::panelHi);
-    characterKnob.slider.setColour (Slider::rotarySliderFillColourId, radical ? pal::amber : pal::violet);
+    identityButton.setToggleState (! radical, dontSendNotification);
+    radicalButton.setToggleState (radical, dontSendNotification);
+    transformButton.setToggleState (! second, dontSendNotification);
+    secondVoiceButton.setToggleState (second, dontSendNotification);
+    characterKnob.slider.setColour (Slider::rotarySliderFillColourId, radical ? pal::rose : pal::violet);
     for (auto* k : { &proMix })
         k->slider.setEnabled (! second);
     for (auto* k : { &proPan, &proOffset, &proWidth, &proReverb, &proDelay })
@@ -426,6 +740,7 @@ void VocalShiftEditor::refreshModeButtons()
                   : u8s ("Identidad: los formantes se mantienen cerca de los originales."));
     modeDescription.setText (d, dontSendNotification);
     layoutVisibility();
+    resized();
     repaint();
 }
 
@@ -440,8 +755,8 @@ void VocalShiftEditor::setUiMode (bool pro)
 {
     proMode = pro;
     state.state.setProperty (params::propUiMode, pro ? "pro" : "easy", nullptr);
-    easyTab.setColour (TextButton::buttonColourId, pro ? pal::panelHi : pal::blue.darker (0.25f));
-    proTab.setColour (TextButton::buttonColourId, pro ? pal::blue.darker (0.25f) : pal::panelHi);
+    easyTab.setToggleState (! pro, dontSendNotification);
+    proTab.setToggleState (pro, dontSendNotification);
 
     for (auto* k : { &pitchKnob, &characterKnob, &magicKnob })
     {
@@ -449,13 +764,19 @@ void VocalShiftEditor::setUiMode (bool pro)
         k->label.setVisible (true);
         k->hint.setVisible (! pro);
     }
+    pitchKnob.label.setVisible (pro); // in Easy the PITCH panel title names it
     for (auto* k : { &proFine, &proFormant, &proBrightness, &proMix, &proGain, &proPan, &proOffset, &proWidth, &proReverb, &proDelay })
     {
         k->slider.setVisible (pro);
         k->label.setVisible (pro);
     }
     modeDescription.setVisible (! pro);
-    for (auto* b : { &safetyButton, &autoLevelButton, &improvedButton, &spatialButton, &engineButton })
+    identity.setVisible (! pro);
+    pitchDownButton.setVisible (! pro);
+    pitchUpButton.setVisible (! pro);
+    for (auto* b : { &safetyButton, &autoLevelButton, &spatialButton })
+        b->setVisible (true);
+    for (auto* b : { &improvedButton, &engineButton })
         b->setVisible (pro);
     engineInfo.setVisible (pro);
     layoutVisibility();
@@ -573,7 +894,10 @@ String VocalShiftEditor::effectiveSummary() const
 void VocalShiftEditor::timerCallback()
 {
     inMeter.setLevel (proc.consumeInputPeak());
-    outMeter.setLevel (proc.consumeOutputPeak());
+    const float outPeak = proc.consumeOutputPeak();
+    outMeter.setLevel (outPeak);
+    if (identity.isVisible())
+        identity.setLevel (outPeak);
     secondMeter.setLevel (proc.consumeSecondVoicePeak());
     inMeter.setClipped (proc.inputClipped());
     outMeter.setClipped (proc.outputClipped());
@@ -610,39 +934,83 @@ void VocalShiftEditor::timerCallback()
     }
 }
 
+void VocalShiftEditor::paintPanel (Graphics& g, Rectangle<int> area, const String& text, Colour accent) const
+{
+    if (area.isEmpty())
+        return;
+    auto r = area.toFloat();
+    const float corner = 12.0f;
+    g.setColour (Colours::black.withAlpha (0.45f));
+    g.fillRoundedRectangle (r.translated (0.0f, 2.0f), corner);
+    g.setGradientFill (ColourGradient (Colour (0xff1c1729), 0, r.getY(), Colour (0xff110e19), 0, r.getBottom(), false));
+    g.fillRoundedRectangle (r, corner);
+    g.setColour (pal::panelEdge);
+    g.drawRoundedRectangle (r.reduced (0.5f), corner, 1.0f);
+    g.setColour (Colours::white.withAlpha (0.05f));
+    g.drawHorizontalLine ((int) r.getY() + 1, r.getX() + corner, r.getRight() - corner);
+    if (text.isNotEmpty())
+    {
+        auto t = r.reduced (12.0f, 0.0f).withHeight (30.0f).translated (0.0f, 4.0f);
+        g.setColour (pal::text.withAlpha (0.82f));
+        g.setFont (uiFont (12.5f, true, 0.18f));
+        g.drawText (text, t, Justification::centred);
+        const float tw = 18.0f;
+        g.setGradientFill (ColourGradient (pal::violet, t.getCentreX() - tw, 0, accent, t.getCentreX() + tw, 0, false));
+        g.fillRoundedRectangle (Rectangle<float> (tw * 2.0f, 2.0f).withCentre ({ t.getCentreX(), t.getBottom() - 2.0f }), 1.0f);
+    }
+}
+
 void VocalShiftEditor::paint (Graphics& g)
 {
     g.fillAll (pal::bg);
-    auto r = getLocalBounds();
-    auto top = r.removeFromTop (92);
-    g.setGradientFill (ColourGradient (pal::panelHi, 0, 0, pal::panel, 0, (float) top.getHeight(), false));
+    const auto b = getLocalBounds().toFloat();
+    // deep violet glow behind everything, strongest at the top centre
+    g.setGradientFill (ColourGradient (pal::violetDeep.withAlpha (0.85f), b.getCentreX(), 40.0f, pal::bg.withAlpha (0.0f), b.getCentreX(), b.getHeight() * 0.8f, true));
+    g.fillRect (b);
+
+    // header bar with a neon base line
+    auto top = b.withHeight (64.0f);
+    g.setGradientFill (ColourGradient (Colour (0xff15111f), 0, 0, Colour (0xff0c0a13), 0, top.getBottom(), false));
     g.fillRect (top);
-    g.setColour (pal::blue.withAlpha (0.55f));
-    g.fillRect (top.removeFromBottom (2));
+    g.setGradientFill (ColourGradient (pal::violet.withAlpha (0.0f), 0, 0, pal::rose.withAlpha (0.9f), b.getCentreX(), 0, false));
+    g.fillRect (top.withY (top.getBottom() - 1.5f).withHeight (1.5f).withWidth (b.getCentreX()));
+    g.setGradientFill (ColourGradient (pal::rose.withAlpha (0.9f), b.getCentreX(), 0, pal::violet.withAlpha (0.0f), b.getRight(), 0, false));
+    g.fillRect (Rectangle<float> (b.getCentreX(), top.getBottom() - 1.5f, b.getCentreX(), 1.5f));
 
     if (proMode)
     {
-        g.setFont (FontOptions (11.5f, Font::bold));
         for (int i = 0; i < 6; ++i)
+            paintPanel (g, proPanels[i], u8s (proPanelTitles[i]), i % 2 == 0 ? pal::rose : pal::violet);
+    }
+    else
+    {
+        paintPanel (g, easyVoicePanel, "VOZ", pal::violet);
+        paintPanel (g, easyPitchPanel, "PITCH", pal::rose);
+        // pitch scale around the big knob (same geometry as the LookAndFeel)
+        if (! pitchKnobArea.isEmpty())
         {
-            if (proPanels[i].isEmpty()) continue;
-            auto pr = proPanels[i].toFloat();
-            g.setColour (pal::panel);
-            g.fillRoundedRectangle (pr, 10.0f);
-            g.setColour (pal::groove);
-            g.drawRoundedRectangle (pr, 10.0f, 1.0f);
-            g.setColour (i == 3 ? pal::teal : (i == 1 ? pal::violet : pal::blue));
-            g.drawText (u8s (proPanelTitles[i]), pr.reduced (12.0f, 6.0f).removeFromTop (16.0f), Justification::centredLeft);
+            const auto kb = pitchKnobArea.toFloat();
+            const float d = jmin (kb.getWidth(), kb.getHeight());
+            const auto c = kb.getCentre();
+            const float rLabel = d * 0.5f * 0.89f + d * 0.5f * 0.89f * 0.075f * 1.7f + 12.0f;
+            g.setFont (uiFont (10.5f, true));
+            const float start = degreesToRadians (225.0f), end = degreesToRadians (495.0f);
+            int i = 0;
+            for (auto* lab : { "-24", "-12", "0", "+12", "+24" })
+            {
+                const float a = start + (float) i++ / 4.0f * (end - start);
+                const auto pnt = c.getPointOnCircumference (rLabel, a);
+                g.setColour (pal::dim);
+                g.drawText (u8s (lab), Rectangle<float> (34.0f, 14.0f).withCentre (pnt), Justification::centred);
+            }
         }
     }
-    else if (shownRoute == VoiceRoute::secondVoice)
-    {
-        auto strip = faderStrip.toFloat();
-        g.setColour (pal::panel);
-        g.fillRoundedRectangle (strip, 14.0f);
-        g.setColour (pal::groove);
-        g.drawRoundedRectangle (strip, 14.0f, 1.0f);
-    }
+    if (shownRoute == VoiceRoute::secondVoice)
+        paintPanel (g, faderStrip, {}, pal::rose);
+
+    // footer separator
+    g.setColour (pal::panelEdge);
+    g.drawHorizontalLine (getHeight() - 46, 12.0f, b.getRight() - 12.0f);
 }
 
 void VocalShiftEditor::resized()
@@ -651,66 +1019,123 @@ void VocalShiftEditor::resized()
     state.state.setProperty (params::propUiHeight, getHeight(), nullptr);
 
     auto r = getLocalBounds();
-    auto header = r.removeFromTop (92).reduced (16, 10);
-    // top row: logo, preset, Easy/Pro, bypass
-    auto row1 = header.removeFromTop (34);
-    auto titleArea = row1.removeFromLeft (250);
-    title.setBounds (titleArea.removeFromTop (22));
+    // header: brand | preset (centre) | save/load | Easy/Pro | bypass
+    auto header = r.removeFromTop (64).reduced (16, 12);
+    auto titleArea = header.removeFromLeft (230);
+    title.setBounds (titleArea.removeFromTop (26));
     subtitle.setBounds (titleArea);
-    bypassButton.setBounds (row1.removeFromRight (86));
-    row1.removeFromRight (8);
-    proTab.setBounds (row1.removeFromRight (64).reduced (0, 2));
-    easyTab.setBounds (row1.removeFromRight (64).reduced (0, 2));
-    row1.removeFromRight (14);
-    loadButton.setBounds (row1.removeFromRight (70).reduced (0, 2));
-    row1.removeFromRight (4);
-    saveButton.setBounds (row1.removeFromRight (70).reduced (0, 2));
-    row1.removeFromRight (8);
-    presetBox.setBounds (row1.removeFromRight (jmin (300, row1.getWidth() - 10)).reduced (0, 2));
-    header.removeFromTop (8);
-    // second row: route and mode selectors
-    auto row2 = header.removeFromTop (30);
-    const int bw = jmin (190, (row2.getWidth() - 24) / 4);
-    transformButton.setBounds (row2.removeFromLeft (bw).reduced (2, 0));
-    secondVoiceButton.setBounds (row2.removeFromLeft (bw).reduced (2, 0));
-    row2.removeFromLeft (22);
-    identityButton.setBounds (row2.removeFromLeft (bw).reduced (2, 0));
-    radicalButton.setBounds (row2.removeFromLeft (bw).reduced (2, 0));
+    bypassButton.setBounds (header.removeFromRight (84));
+    header.removeFromRight (8);
+    auto tabs = header.removeFromRight (132).reduced (0, 3);
+    proTab.setBounds (tabs.removeFromRight (66).reduced (1, 0));
+    easyTab.setBounds (tabs.reduced (1, 0));
+    header.removeFromRight (14);
+    loadButton.setBounds (header.removeFromRight (66).reduced (0, 4));
+    header.removeFromRight (4);
+    saveButton.setBounds (header.removeFromRight (66).reduced (0, 4));
+    header.removeFromRight (10);
+    presetBox.setBounds (header.withSizeKeepingCentre (jmin (300, header.getWidth()), 32));
 
-    r.reduce (16, 10);
-    // bottom strip: meters, status, roadmap
-    auto bottom = r.removeFromBottom (74);
-    auto meters = bottom.removeFromTop (22);
-    inMeter.setBounds (meters.removeFromLeft (meters.getWidth() / 2 - 8));
-    meters.removeFromLeft (16);
-    outMeter.setBounds (meters);
-    status.setBounds (bottom.removeFromTop (24));
-    roadmap.setBounds (bottom.removeFromTop (20));
-    r.removeFromBottom (6);
+    r.reduce (12, 10);
+    // footer: status + roadmap
+    auto footer = r.removeFromBottom (34);
+    status.setBounds (footer.removeFromTop (18));
+    roadmap.setBounds (footer);
+    r.removeFromBottom (10);
+
+    // edge meters, like hardware: IN on the left, OUT on the right
+    inMeter.setBounds (r.removeFromLeft (26));
+    r.removeFromLeft (10);
+    outMeter.setBounds (r.removeFromRight (26));
+    r.removeFromRight (10);
 
     const bool second = shownRoute == VoiceRoute::secondVoice;
     Rectangle<int> faderArea;
     if (second)
-        faderArea = r.removeFromRight (jlimit (150, 200, r.getWidth() / 5));
+    {
+        faderArea = r.removeFromRight (jlimit (104, 140, r.getWidth() / 7));
+        r.removeFromRight (10);
+    }
+
+    easyVoicePanel = easyPitchPanel = pitchKnobArea = {};
+    for (auto& p : proPanels) p = {};
 
     if (! proMode)
     {
-        modeDescription.setBounds (r.removeFromTop (34));
-        auto macros = r.reduced (0, 6);
-        const int w = macros.getWidth() / 3;
-        for (auto* k : { &pitchKnob, &characterKnob, &magicKnob })
+        const int gap = 10;
+        const int total = r.getWidth() - 2 * gap;
+        const int wl = total * 31 / 100, wc = total * 37 / 100;
+        easyVoicePanel = r.removeFromLeft (wl);
+        r.removeFromLeft (gap);
+        auto centre = r.removeFromLeft (wc);
+        r.removeFromLeft (gap);
+        easyPitchPanel = r;
+
+        // centre: identity panel with the route selector floating at its foot
+        identity.setBounds (centre);
         {
-            auto cell = macros.removeFromLeft (w).reduced (10, 0);
-            k->label.setBounds (cell.removeFromTop (28));
-            k->hint.setBounds (cell.removeFromBottom (34));
-            const int side = jmin (cell.getWidth(), cell.getHeight() - 30, 270);
-            auto knobArea = cell.withSizeKeepingCentre (jmax (60, side), jmax (60, side + 30));
-            k->slider.setBounds (knobArea);
+            auto rb = centre.reduced (14).removeFromBottom (32);
+            rb = rb.withSizeKeepingCentre (jmin (rb.getWidth(), 260), rb.getHeight());
+            transformButton.setBounds (rb.removeFromLeft (rb.getWidth() / 2).reduced (2, 0));
+            secondVoiceButton.setBounds (rb.reduced (2, 0));
+        }
+
+        // left: VOZ (mode, description, Caracter and Magia)
+        {
+            auto a = easyVoicePanel.reduced (14, 10);
+            a.removeFromTop (34);
+            auto modeRow = a.removeFromTop (30);
+            identityButton.setBounds (modeRow.removeFromLeft (modeRow.getWidth() / 2).reduced (2, 0));
+            radicalButton.setBounds (modeRow.reduced (2, 0));
+            a.removeFromTop (8);
+            modeDescription.setBounds (a.removeFromTop (jlimit (40, 64, a.getHeight() / 5)));
+            a.removeFromTop (4);
+            // knob + name + hint as one group, centred vertically in what is left
+            const int w = a.getWidth() / 2;
+            const int side = jmax (60, jmin (w - 4, a.getHeight() - 70, 200));
+            auto group = a.withSizeKeepingCentre (a.getWidth(), jmin (a.getHeight(), side + 70));
+            for (auto* k : { &characterKnob, &magicKnob })
+            {
+                auto cell = group.removeFromLeft (w).reduced (2, 0);
+                k->slider.setBounds (cell.removeFromTop (side).withSizeKeepingCentre (side, side));
+                k->label.setBounds (cell.removeFromTop (22));
+                k->hint.setBounds (cell);
+            }
+        }
+
+        // right: PITCH (big knob with scale, -12/+12, switches)
+        {
+            auto a = easyPitchPanel.reduced (14, 10);
+            a.removeFromTop (34);
+            auto row = a.removeFromTop (26);
+            row = row.withSizeKeepingCentre (jmin (row.getWidth(), 124), row.getHeight());
+            pitchDownButton.setBounds (row.removeFromLeft (row.getWidth() / 2).reduced (3, 0));
+            pitchUpButton.setBounds (row.reduced (3, 0));
+            auto toggles = a.removeFromBottom (84);
+            const int th = toggles.getHeight() / 3;
+            for (auto* t : { (Component*) &spatialButton, (Component*) &autoLevelButton, (Component*) &safetyButton })
+                t->setBounds (toggles.removeFromTop (th));
+            a.removeFromBottom (6);
+            const int side = jmax (60, jmin (a.getWidth() - 44, a.getHeight() - 76, 300));
+            auto group = a.withSizeKeepingCentre (a.getWidth(), jmin (a.getHeight(), side + 66));
+            group.removeFromTop (22); // room for the "0" scale label
+            pitchKnobArea = group.removeFromTop (side).withSizeKeepingCentre (side, side);
+            pitchKnob.slider.setBounds (pitchKnobArea);
+            pitchKnob.hint.setBounds (group.withTrimmedTop (16));
         }
     }
     else
     {
-        for (auto& p : proPanels) p = {};
+        // route and mode selectors on top of the Pro grid
+        auto row2 = r.removeFromTop (30);
+        const int bw = jmin (150, (row2.getWidth() - 24) / 4);
+        transformButton.setBounds (row2.removeFromLeft (bw).reduced (2, 0));
+        secondVoiceButton.setBounds (row2.removeFromLeft (bw).reduced (2, 0));
+        row2.removeFromLeft (22);
+        identityButton.setBounds (row2.removeFromLeft (bw).reduced (2, 0));
+        radicalButton.setBounds (row2.removeFromLeft (bw).reduced (2, 0));
+        r.removeFromTop (10);
+
         auto grid = r;
         auto rowTop = grid.removeFromTop (grid.getHeight() * 45 / 100);
         grid.removeFromTop (8);
@@ -718,9 +1143,9 @@ void VocalShiftEditor::resized()
         grid.removeFromTop (8);
         auto rowBottom = grid;
 
-        auto place = [] (Rectangle<int> area, std::initializer_list<Knob*> ks, int headerH = 24) {
+        auto place = [] (Rectangle<int> area, std::initializer_list<Knob*> ks, int headerH = 32) {
             area.removeFromTop (headerH);
-            area.reduce (6, 2);
+            area.reduce (6, 4);
             const int w = area.getWidth() / (int) ks.size();
             for (auto* k : ks)
             {
@@ -740,8 +1165,8 @@ void VocalShiftEditor::resized()
         place (proPanels[1], { &characterKnob, &proFormant, &proBrightness });
         {
             auto a = proPanels[2];
-            a.removeFromTop (24);
-            a.reduce (6, 2);
+            a.removeFromTop (32);
+            a.reduce (6, 4);
             auto knobCell = a.removeFromLeft (a.getWidth() / 2).reduced (3, 0);
             magicKnob.label.setBounds (knobCell.removeFromTop (16));
             magicKnob.slider.setBounds (knobCell);
@@ -754,11 +1179,10 @@ void VocalShiftEditor::resized()
         rowMid.removeFromLeft (8);
         proPanels[4] = rowMid;
         {
-            auto a = proPanels[3];
-            auto inner = a;
-            inner.removeFromTop (24);
-            inner.reduce (6, 2);
-            spatialButton.setBounds (inner.removeFromBottom (30));
+            auto inner = proPanels[3];
+            inner.removeFromTop (32);
+            inner.reduce (6, 4);
+            spatialButton.setBounds (inner.removeFromBottom (28));
             const int w = inner.getWidth() / 3;
             for (auto* k : { &proWidth, &proReverb, &proDelay })
             {
@@ -772,8 +1196,8 @@ void VocalShiftEditor::resized()
         proPanels[5] = rowBottom;
         {
             auto a = proPanels[5];
-            a.removeFromTop (24);
-            a.reduce (12, 2);
+            a.removeFromTop (32);
+            a.reduce (14, 2);
             auto toggles = a.removeFromTop (28);
             improvedButton.setBounds (toggles.removeFromLeft (toggles.getWidth() / 2));
             engineButton.setBounds (toggles);
@@ -781,13 +1205,13 @@ void VocalShiftEditor::resized()
         }
     }
 
-    faderStrip = faderArea.reduced (4, 0);
+    faderStrip = faderArea;
     if (second)
     {
-        auto f = faderArea.reduced (14, 10);
+        auto f = faderArea.reduced (10, 10);
         faderLabel.setBounds (f.removeFromTop (22));
-        auto m = f.removeFromRight (22);
-        secondMeter.setBounds (m.withTrimmedTop (4).withTrimmedBottom (28));
+        auto m = f.removeFromRight (16);
+        secondMeter.setBounds (m.withTrimmedTop (4).withTrimmedBottom (26));
         fader.setBounds (f.withTrimmedTop (4));
     }
 }
