@@ -94,10 +94,11 @@ private:
     // All shapes are authored in a 1000-unit box and mapped to the panel in resized().
     struct Singer
     {
-        juce::Path silhouette, frontContour, upperLip, lowerLip, mouth, teeth, brow, eyeLines, eyeFill, jawLine, hairMass;
+        juce::Path silhouette, frontContour, upperLip, lowerLip, mouth, teeth, brow, eyeLines, eyeFill, jawLine, hairMass, ear;
         std::vector<juce::Path> strands, strandTails; // tails are drawn thinner and fainter so the ends taper
+        std::vector<juce::Path> locks, lockLines;      // side-swept fringe over the forehead
         std::vector<float> strandWidth, strandAlpha;
-        juce::Point<float> mouthPoint, cheek, eyeSocket, underJaw;
+        juce::Point<float> mouthPoint, cheek, eyeSocket, underJaw, earring;
         float unit = 1.0f; // pixels per design unit
     };
     void buildSinger();

@@ -385,7 +385,7 @@ Point<float> IdentityPanel::u (float x, float y) const
 
 Point<float> IdentityPanel::ringCentre() const
 {
-    return u (560.0f, 400.0f); // halo behind the head
+    return u (530.0f, 400.0f); // halo behind the head
 }
 
 // Builds every path of the singer once per size change (never per frame).
@@ -394,9 +394,9 @@ void IdentityPanel::buildSinger()
     const float w = (float) getWidth(), h = (float) getHeight();
     if (w <= 0.0f || h <= 0.0f)
         return;
-    // fit ~620 design units across the panel (hair back to the sound waves), head near the top
-    const float s = jmin (w / 620.0f, h / 1150.0f);
-    toPanel = AffineTransform::translation (-520.0f, -60.0f).scaled (s).translated (w * 0.5f, h * 0.04f);
+    // fit ~650 design units across the panel (hair back to the sound waves), head near the top
+    const float s = jmin (w / 650.0f, h / 1150.0f);
+    toPanel = AffineTransform::translation (-495.0f, -60.0f).scaled (s).translated (w * 0.5f, h * 0.04f);
 
     Singer g;
     g.unit = s;
@@ -416,40 +416,43 @@ void IdentityPanel::buildSinger()
         return p;
     };
 
-    // Front contour, chin raised as when singing: forehead, nose, open mouth, chin, throat, shoulder.
+    // Front contour, chin raised as when singing. Proportions v3: lower forehead (hairline brought down and forward),
+    // shorter skull, softer nose, fuller lips and a rounder, smaller chin.
     const std::initializer_list<float> front {
-        560, 170,
-        630, 180, 668, 240, 675, 300,   // forehead
-        680, 320, 684, 335, 683, 345,   // brow ridge
-        700, 375, 735, 400, 752, 420,   // nose bridge to tip
-        760, 430, 752, 442, 738, 444,   // tip to columella
-        728, 446, 722, 450, 724, 458,   // philtrum
-        738, 466, 744, 476, 738, 484,   // upper lip
-        726, 490, 712, 492, 702, 494,   // into the open mouth
-        712, 502, 726, 510, 728, 522,   // lower lip, front
-        729, 534, 720, 542, 708, 545,   // lower lip, bottom
-        702, 552, 704, 562, 712, 575,   // labiomental fold
-        722, 595, 718, 615, 700, 628,   // chin
-        670, 645, 630, 648, 600, 650,   // under the chin
-        612, 700, 622, 760, 630, 830,   // throat
-        700, 860, 820, 880, 950, 940 }; // shoulder
+        640, 228,
+        662, 250, 672, 285, 672, 315,   // forehead (under the fringe)
+        673, 328, 676, 336, 678, 342,   // brow ridge
+        690, 368, 716, 398, 734, 418,   // nose bridge
+        744, 428, 738, 440, 724, 441,   // soft nose tip
+        716, 442, 712, 446, 713, 452,   // philtrum
+        726, 458, 734, 468, 728, 476,   // upper lip
+        718, 481, 706, 483, 698, 484,   // into the open mouth
+        708, 490, 720, 498, 721, 509,   // lower lip, front
+        721, 520, 712, 527, 702, 528,   // lower lip, bottom
+        697, 534, 699, 544, 705, 553,   // labiomental fold
+        712, 568, 708, 584, 692, 592,   // chin
+        668, 606, 632, 610, 604, 612,   // under the chin
+        612, 660, 620, 720, 628, 790,   // throat
+        700, 830, 820, 850, 950, 910 }; // shoulder
     g.frontContour = pathFrom (front, false);
 
     g.silhouette = g.frontContour;
     g.silhouette.lineTo (u (950, 2000));
     g.silhouette.lineTo (u (100, 2000));
     g.silhouette.lineTo (u (100, 960));
-    g.silhouette.cubicTo (u (220, 900), u (360, 880), u (420, 820));   // back shoulder
-    g.silhouette.cubicTo (u (432, 760), u (420, 680), u (380, 600));   // nape
-    g.silhouette.cubicTo (u (300, 520), u (300, 300), u (400, 200));   // back of the head
-    g.silhouette.cubicTo (u (450, 160), u (510, 160), u (560, 170));   // crown
+    g.silhouette.cubicTo (u (220, 890), u (360, 860), u (420, 800));   // back shoulder
+    g.silhouette.cubicTo (u (430, 740), u (418, 660), u (388, 590));   // nape
+    g.silhouette.cubicTo (u (320, 510), u (330, 300), u (420, 230));   // back of the head (shorter skull)
+    g.silhouette.cubicTo (u (480, 170), u (600, 190), u (640, 228));   // crown
     g.silhouette.closeSubPath();
 
-    g.upperLip = pathFrom ({ 724, 458, 738, 466, 744, 476, 738, 484, 726, 490, 712, 492, 702, 494, 700, 482, 708, 468, 724, 458 }, true);
-    g.lowerLip = pathFrom ({ 702, 494, 712, 502, 726, 510, 728, 522, 729, 534, 720, 542, 708, 545, 700, 530, 698, 510, 702, 494 }, true);
-    g.mouth = pathFrom ({ 738, 484, 726, 490, 712, 492, 702, 494, 712, 502, 726, 510, 728, 522, 736, 512, 742, 496, 738, 484 }, true);
-    g.teeth = pathFrom ({ 736, 486, 728, 490, 716, 492, 706, 494, 709, 496, 712, 498, 714, 498, 724, 496, 732, 492, 736, 486 }, true);
-    g.brow = pathFrom ({ 622, 333, 633, 323, 660, 310, 692, 322, 668, 318, 642, 322, 622, 333 }, true);
+    g.upperLip = pathFrom ({ 713, 452, 726, 458, 734, 468, 728, 476, 718, 481, 706, 483, 698, 484, 696, 472, 702, 460, 713, 452 }, true);
+    g.lowerLip = pathFrom ({ 698, 484, 708, 490, 720, 498, 721, 509, 721, 520, 712, 527, 702, 528, 694, 516, 692, 498, 698, 484 }, true);
+    g.mouth = pathFrom ({ 728, 476, 718, 481, 706, 483, 698, 484, 708, 490, 720, 498, 721, 509, 728, 500, 732, 486, 728, 476 }, true);
+    g.teeth = pathFrom ({ 726, 478, 718, 481, 708, 483, 701, 485, 702, 486, 703, 487, 704, 487, 712, 486, 720, 484, 726, 478 }, true);
+    g.brow = pathFrom ({ 624, 340, 640, 328, 660, 322, 674, 329, 660, 326, 642, 330, 624, 340 }, true);
+    g.ear = pathFrom ({ 532, 388, 506, 380, 496, 420, 508, 452, 516, 468, 530, 468, 536, 455 }, false);
+    g.earring = u (514, 500);
 
     // eye: closed lid as a tapered crescent with a soft wing, curved tapered lashes; faint crease and nostril
     {
@@ -479,18 +482,18 @@ void IdentityPanel::buildSinger()
         g.eyeFill = f;
 
         Path e;
-        e.startNewSubPath (u (646, 356));
-        e.quadraticTo (u (666, 349), u (686, 357));
-        e.startNewSubPath (u (722, 432));
-        e.quadraticTo (u (731, 440), u (741, 437));
+        e.startNewSubPath (u (644, 354));
+        e.quadraticTo (u (662, 348), u (680, 355));
+        e.startNewSubPath (u (712, 430));
+        e.quadraticTo (u (721, 437), u (730, 434));
         g.eyeLines = e;
     }
-    g.jawLine = pathFrom ({ 698, 628, 640, 600, 580, 580, 540, 520 }, false);
+    g.jawLine = pathFrom ({ 688, 594, 630, 580, 570, 560, 540, 478 }, false);
 
     // Hair: wavy strands between an inner guide (along the face) and an outer guide (volume behind the head)
     {
-        const Point<float> inner[7] = { { 565, 168 }, { 520, 200 }, { 500, 350 }, { 500, 500 }, { 495, 650 }, { 440, 800 }, { 470, 980 } };
-        const Point<float> outer[7] = { { 560, 165 }, { 400, 60 }, { 200, 160 }, { 200, 450 }, { 195, 700 }, { 140, 850 }, { 120, 1000 } };
+        const Point<float> inner[7] = { { 640, 226 }, { 590, 196 }, { 520, 270 }, { 492, 400 }, { 480, 560 }, { 450, 720 }, { 470, 960 } };
+        const Point<float> outer[7] = { { 610, 150 }, { 400, 40 }, { 170, 150 }, { 160, 440 }, { 150, 690 }, { 90, 840 }, { 110, 1020 } }; // fuller volume
         auto bez = [] (Point<float> a, Point<float> b, Point<float> c, Point<float> d, float t) {
             const float m = 1.0f - t;
             return a * (m * m * m) + b * (3.0f * t * m * m) + c * (3.0f * t * t * m) + d * (t * t * t);
@@ -506,8 +509,8 @@ void IdentityPanel::buildSinger()
             {
                 const float v = (float) k / (float) m;
                 auto q = v <= 0.5f ? bez (p[0], p[1], p[2], p[3], v * 2.0f) : bez (p[3], p[4], p[5], p[6], (v - 0.5f) * 2.0f);
-                const float fall = jmax (0.0f, (q.y - 200.0f) / 800.0f);
-                q.x += 48.0f * fall * std::sin (q.y / 120.0f + phase); // waves grow towards the ends
+                const float fall = jmax (0.0f, (q.y - 260.0f) / 760.0f);
+                q.x += 58.0f * fall * std::sin (q.y / 110.0f + phase); // natural waves that grow towards the ends
                 if (v > 0.72f)
                 {
                     const float e = (v - 0.72f) / 0.28f;
@@ -525,7 +528,7 @@ void IdentityPanel::buildSinger()
             return p;
         };
 
-        const int n = 30;
+        const int n = 34;
         for (int i = 0; i < n; ++i)
         {
             const float t = (float) i / (float) (n - 1);
@@ -542,12 +545,45 @@ void IdentityPanel::buildSinger()
         for (auto it = innerPts.rbegin(); it != innerPts.rend(); ++it)
             g.hairMass.lineTo (u (it->x, it->y));
         g.hairMass.closeSubPath();
+
+        // side-swept fringe: tapered locks from the crown over the upper forehead, curling back towards the ear
+        struct Lock { Point<float> a, b, c, d; float w; };
+        const Lock locks[] = { { { 560, 160 }, { 650, 150 }, { 700, 215 }, { 668, 296 }, 22 },
+                               { { 548, 166 }, { 640, 165 }, { 684, 240 }, { 630, 300 }, 20 },
+                               { { 540, 170 }, { 620, 180 }, { 650, 270 }, { 590, 310 }, 18 },
+                               { { 530, 176 }, { 600, 200 }, { 610, 290 }, { 548, 330 }, 16 },
+                               { { 575, 158 }, { 660, 160 }, { 704, 200 }, { 690, 262 }, 12 } };
+        for (const auto& lk : locks)
+        {
+            std::vector<Point<float>> left, right;
+            const int m = 24;
+            for (int k = 0; k <= m; ++k)
+            {
+                const float t = (float) k / (float) m;
+                const auto c = bez (lk.a, lk.b, lk.c, lk.d, t);
+                const auto d = bez (lk.a, lk.b, lk.c, lk.d, jmin (1.0f, t + 0.01f)) - bez (lk.a, lk.b, lk.c, lk.d, jmax (0.0f, t - 0.01f));
+                const float len = jmax (0.001f, d.getDistanceFromOrigin());
+                const Point<float> nrm (-d.y / len, d.x / len);
+                const float ww = lk.w * std::pow (std::sin (MathConstants<float>::pi * jmin (1.0f, t * 1.15f)), 0.8f) * (1.0f - 0.75f * t);
+                left.push_back (c + nrm * ww);
+                right.push_back (c - nrm * ww);
+            }
+            Path p = toPath (left);
+            for (auto it = right.rbegin(); it != right.rend(); ++it)
+                p.lineTo (u (it->x, it->y));
+            p.closeSubPath();
+            g.locks.push_back (p);
+            Path line;
+            line.startNewSubPath (u (lk.a.x, lk.a.y));
+            line.cubicTo (u (lk.b.x, lk.b.y), u (lk.c.x, lk.c.y), u (lk.d.x, lk.d.y));
+            g.lockLines.push_back (line);
+        }
     }
 
-    g.mouthPoint = u (745, 505);
-    g.cheek = u (650, 440);
-    g.eyeSocket = u (662, 362);
-    g.underJaw = u (640, 660);
+    g.mouthPoint = u (735, 492);
+    g.cheek = u (640, 425);
+    g.eyeSocket = u (660, 362);
+    g.underJaw = u (630, 620);
     singer = std::move (g);
 }
 
@@ -609,10 +645,10 @@ void IdentityPanel::renderBackground()
         // 2) soft modelling inside the face: cheek light, eye socket and under-jaw shadows
         g.saveState();
         g.reduceClipRegion (sg.silhouette);
-        radial (sg.cheek, 110.0f * un, pal::roseSoft.withAlpha (0.32f));
+        radial (sg.cheek, 100.0f * un, pal::roseSoft.withAlpha (0.32f));
         radial (sg.eyeSocket, 48.0f * un, pal::bg.withAlpha (0.42f));
-        radial (sg.underJaw, 95.0f * un, pal::bg.withAlpha (0.55f));
-        radial (u (700, 520), 60.0f * un, pal::rose.withAlpha (0.22f)); // warm glow around the mouth
+        radial (sg.underJaw, 90.0f * un, pal::bg.withAlpha (0.55f));
+        radial (u (695, 495), 55.0f * un, pal::rose.withAlpha (0.22f)); // warm glow around the mouth
         {
             const auto f0 = u (0, 740), f1 = u (0, 1040);
             g.setGradientFill (ColourGradient (pal::bg.withAlpha (0.0f), 0, f0.y, pal::bg.withAlpha (0.85f), 0, f1.y, false));
@@ -632,19 +668,19 @@ void IdentityPanel::renderBackground()
             g.setColour (pal::rose.withAlpha (al));
             g.strokePath (sg.frontContour, PathStrokeType (wd * un * 1.6f, PathStrokeType::curved, PathStrokeType::rounded));
         }
-        const auto top = u (600, 180), chin = u (700, 640);
+        const auto top = u (620, 230), chin = u (690, 600);
         g.setGradientFill (ColourGradient (pal::violet, top.x, top.y, pal::rose, chin.x, chin.y, false));
         g.strokePath (sg.frontContour, PathStrokeType (jmax (1.2f, 3.2f * un), PathStrokeType::curved, PathStrokeType::rounded));
 
         // 5) lips with gloss, brow, eye and nose details
-        const auto lipA = u (700, 460), lipB = u (735, 540);
+        const auto lipA = u (695, 455), lipB = u (725, 525);
         g.setGradientFill (ColourGradient (pal::rose, lipA.x, lipA.y, pal::roseSoft, lipB.x, lipB.y, false));
         g.fillPath (sg.upperLip);
         g.fillPath (sg.lowerLip);
         {
             Path gloss;
-            gloss.startNewSubPath (u (716, 512));
-            gloss.quadraticTo (u (722, 520), u (720, 530));
+            gloss.startNewSubPath (u (708, 500));
+            gloss.quadraticTo (u (714, 507), u (713, 516));
             g.setColour (Colours::white.withAlpha (0.6f));
             g.strokePath (gloss, PathStrokeType (jmax (1.0f, 2.0f * un), PathStrokeType::curved, PathStrokeType::rounded));
         }
@@ -653,7 +689,7 @@ void IdentityPanel::renderBackground()
         {
             g.saveState();
             g.reduceClipRegion (sg.silhouette);
-            const auto lidC = u (662, 360);
+            const auto lidC = u (660, 360);
             g.setGradientFill (ColourGradient (pal::rose.withAlpha (0.30f), lidC.x, lidC.y, pal::rose.withAlpha (0.0f), lidC.x + 30.0f * un, lidC.y, true));
             g.fillEllipse (Rectangle<float> (60.0f * un, 40.0f * un).withCentre (lidC)); // soft eyeshadow
             g.restoreState();
@@ -697,6 +733,28 @@ void IdentityPanel::renderBackground()
             g.strokePath (sg.strands[i], PathStrokeType (jmax (0.6f, sg.strandWidth[i]), PathStrokeType::curved, PathStrokeType::rounded));
             g.strokePath (sg.strandTails[i], PathStrokeType (jmax (0.5f, sg.strandWidth[i] * 0.75f), PathStrokeType::curved, PathStrokeType::rounded));
         }
+
+        // 7) fringe locks over the forehead, then ear and hoop earring
+        {
+            const auto l0 = u (560, 160), l1 = u (640, 320);
+            ColourGradient lockGrad (Colour (0xff7a3aa0), l0.x, l0.y, pal::rose.withAlpha (0.85f), l1.x, l1.y, false);
+            lockGrad.addColour (0.6, Colour (0xffc03a8e));
+            for (size_t i = 0; i < sg.locks.size(); ++i)
+            {
+                auto gr = lockGrad;
+                gr.multiplyOpacity (0.92f - 0.08f * (float) i);
+                g.setGradientFill (gr);
+                g.fillPath (sg.locks[i]);
+                g.setColour (pal::roseSoft.withAlpha (0.7f));
+                g.strokePath (sg.lockLines[i], PathStrokeType (jmax (0.6f, 1.3f * un), PathStrokeType::curved, PathStrokeType::rounded));
+            }
+        }
+        g.setColour (Colour (0x997a2a64));
+        g.fillPath (sg.ear);
+        g.setColour (pal::rose);
+        g.strokePath (sg.ear, PathStrokeType (jmax (0.8f, 2.6f * un), PathStrokeType::curved, PathStrokeType::rounded));
+        g.setColour (pal::roseSoft);
+        g.drawEllipse (Rectangle<float> (52.0f * un, 52.0f * un).withCentre (sg.earring), jmax (0.8f, 3.0f * un));
     }
 
     // bottom fade so the route selector reads clearly, and a top sheen
