@@ -451,17 +451,34 @@ void IdentityPanel::buildSinger()
     g.teeth = pathFrom ({ 736, 486, 728, 490, 716, 492, 706, 494, 709, 496, 712, 498, 714, 498, 724, 496, 732, 492, 736, 486 }, true);
     g.brow = pathFrom ({ 622, 333, 633, 323, 660, 310, 692, 322, 668, 318, 642, 322, 622, 333 }, true);
 
-    // eye: closed lid with lashes, faint crease, nostril
+    // eye: closed lid as a tapered crescent with a soft wing, curved tapered lashes; faint crease and nostril
     {
-        Path e;
-        e.startNewSubPath (u (640, 368));
-        e.quadraticTo (u (662, 382), u (688, 366));
-        for (int i = 0; i < 5; ++i)
+        Path f;
+        f.startNewSubPath (u (624, 357));                        // wing tip towards the temple
+        f.quadraticTo (u (633, 364), u (641, 367));
+        f.quadraticTo (u (663, 383), u (688, 366));               // lower edge of the lid line
+        f.quadraticTo (u (663, 378), u (643, 365));               // upper edge (thicker in the middle)
+        f.quadraticTo (u (634, 362), u (624, 357));
+        f.closeSubPath();
+        auto lid = [] (float t) { // point on the lid curve (640,368)-(662,382)-(688,366)
+            const float m = 1.0f - t;
+            return Point<float> (m * m * 640.0f + 2.0f * m * t * 662.0f + t * t * 688.0f, m * m * 368.0f + 2.0f * m * t * 382.0f + t * t * 366.0f);
+        };
+        for (int i = 0; i < 7; ++i)
         {
-            const float x = 646.0f + 9.0f * (float) i, y = 372.0f + (i == 0 || i == 4 ? -2.0f : 2.0f);
-            e.startNewSubPath (u (x, y));
-            e.quadraticTo (u (x - 1.0f, y + 9.0f), u (x - 9.0f, y + 15.0f));
+            const float t = 0.08f + 0.13f * (float) i;
+            const auto b0 = lid (t);
+            const float len = 13.0f + 7.0f * std::sin (t * MathConstants<float>::pi); // longer in the middle
+            const float sweep = 9.0f - 6.0f * t;                                       // outer lashes sweep back
+            const Point<float> tip (b0.x - sweep, b0.y + len), ctrl (b0.x + 1.5f, b0.y + len * 0.65f);
+            f.startNewSubPath (u (b0.x - 1.4f, b0.y));
+            f.quadraticTo (u (ctrl.x - 1.0f, ctrl.y), u (tip.x, tip.y));
+            f.quadraticTo (u (ctrl.x + 1.0f, ctrl.y), u (b0.x + 1.4f, b0.y));
+            f.closeSubPath();
         }
+        g.eyeFill = f;
+
+        Path e;
         e.startNewSubPath (u (646, 356));
         e.quadraticTo (u (666, 349), u (686, 357));
         e.startNewSubPath (u (722, 432));
@@ -478,7 +495,7 @@ void IdentityPanel::buildSinger()
             const float m = 1.0f - t;
             return a * (m * m * m) + b * (3.0f * t * m * m) + c * (3.0f * t * t * m) + d * (t * t * t);
         };
-        auto strandPoints = [&] (float t, float phase, float endExtra) {
+        auto strandPoints = [&] (float t, float phase, float endExtra, float curl = 0.0f) {
             Point<float> p[7];
             for (int k = 0; k < 7; ++k)
                 p[k] = inner[k] + (outer[k] - inner[k]) * t;
@@ -491,6 +508,11 @@ void IdentityPanel::buildSinger()
                 auto q = v <= 0.5f ? bez (p[0], p[1], p[2], p[3], v * 2.0f) : bez (p[3], p[4], p[5], p[6], (v - 0.5f) * 2.0f);
                 const float fall = jmax (0.0f, (q.y - 200.0f) / 800.0f);
                 q.x += 48.0f * fall * std::sin (q.y / 120.0f + phase); // waves grow towards the ends
+                if (v > 0.72f)
+                {
+                    const float e = (v - 0.72f) / 0.28f;
+                    q.x += curl * e * e; // loose, slightly curled ends
+                }
                 pts.push_back (q);
             }
             return pts;
@@ -507,7 +529,11 @@ void IdentityPanel::buildSinger()
         for (int i = 0; i < n; ++i)
         {
             const float t = (float) i / (float) (n - 1);
-            g.strands.push_back (toPath (strandPoints (t, 0.35f * t + 0.5f * (float) ((i * 5) % 3), 14.0f * (float) ((i * 7) % 5))).createPathWithRoundedCorners (4.0f * s));
+            const float curl = (i % 2 == 0 ? -1.0f : 1.0f) * (10.0f + 8.0f * (float) ((i * 3) % 3));
+            const auto pts = strandPoints (t, 0.35f * t + 0.5f * (float) ((i * 5) % 3), 22.0f * (float) ((i * 7) % 5), curl);
+            const size_t split = pts.size() * 8 / 10;
+            g.strands.push_back (toPath ({ pts.begin(), pts.begin() + (long) split + 1 }).createPathWithRoundedCorners (4.0f * s));
+            g.strandTails.push_back (toPath ({ pts.begin() + (long) split, pts.end() }).createPathWithRoundedCorners (4.0f * s));
             g.strandWidth.push_back ((0.7f + 1.8f * (float) ((i * 5) % 4) / 3.0f) * s);
             g.strandAlpha.push_back (0.40f + 0.55f * (float) ((i * 3) % 4) / 3.0f);
         }
@@ -588,7 +614,7 @@ void IdentityPanel::renderBackground()
         radial (sg.underJaw, 95.0f * un, pal::bg.withAlpha (0.55f));
         radial (u (700, 520), 60.0f * un, pal::rose.withAlpha (0.22f)); // warm glow around the mouth
         {
-            const auto f0 = u (0, 820), f1 = u (0, 1000);
+            const auto f0 = u (0, 740), f1 = u (0, 1040);
             g.setGradientFill (ColourGradient (pal::bg.withAlpha (0.0f), 0, f0.y, pal::bg.withAlpha (0.85f), 0, f1.y, false));
             g.fillRect (r);
         }
@@ -624,8 +650,18 @@ void IdentityPanel::renderBackground()
         }
         g.setColour (pal::roseSoft.withAlpha (0.85f));
         g.fillPath (sg.brow);
-        g.setColour (Colour (0xffffd6ea));
-        g.strokePath (sg.eyeLines, PathStrokeType (jmax (1.0f, 2.4f * un), PathStrokeType::curved, PathStrokeType::rounded));
+        {
+            g.saveState();
+            g.reduceClipRegion (sg.silhouette);
+            const auto lidC = u (662, 360);
+            g.setGradientFill (ColourGradient (pal::rose.withAlpha (0.30f), lidC.x, lidC.y, pal::rose.withAlpha (0.0f), lidC.x + 30.0f * un, lidC.y, true));
+            g.fillEllipse (Rectangle<float> (60.0f * un, 40.0f * un).withCentre (lidC)); // soft eyeshadow
+            g.restoreState();
+        }
+        g.setColour (Colour (0xffffe0ef));
+        g.fillPath (sg.eyeFill);
+        g.setColour (Colour (0xffffd6ea).withAlpha (0.55f));
+        g.strokePath (sg.eyeLines, PathStrokeType (jmax (0.8f, 1.5f * un), PathStrokeType::curved, PathStrokeType::rounded));
         g.setColour (pal::violet.withAlpha (0.35f));
         g.strokePath (sg.jawLine, PathStrokeType (jmax (1.0f, 2.0f * un), PathStrokeType::curved, PathStrokeType::rounded));
 
@@ -633,8 +669,19 @@ void IdentityPanel::renderBackground()
         const auto hTop = u (600, 120), hBottom = u (180, 1000);
         g.setGradientFill (ColourGradient (Colour (0xf25a2a7a), hTop.x, hTop.y, Colour (0xe61a0e2a), hBottom.x, hBottom.y, false));
         g.fillPath (sg.hairMass);
-        ColourGradient strandGrad (pal::roseSoft, hTop.x, hTop.y, pal::violet, hBottom.x, hBottom.y, false);
-        strandGrad.addColour (0.45, pal::rose);
+        {
+            // the lower hair volume dissolves softly instead of ending in a block
+            g.saveState();
+            g.reduceClipRegion (sg.hairMass);
+            const auto f0 = u (0, 640), f1 = u (0, 1040);
+            g.setGradientFill (ColourGradient (pal::bg.withAlpha (0.0f), 0, f0.y, pal::bg.withAlpha (0.8f), 0, f1.y, false));
+            g.fillRect (r);
+            g.restoreState();
+        }
+        const auto sEnd = u (180, 1070);
+        ColourGradient strandGrad (pal::roseSoft, hTop.x, hTop.y, pal::violet.withAlpha (0.0f), sEnd.x, sEnd.y, false);
+        strandGrad.addColour (0.42, pal::rose);
+        strandGrad.addColour (0.72, pal::violet); // strands dissolve gradually towards their ends
         for (size_t i = 0; i < sg.strands.size(); i += 4)
         {
             auto gr = strandGrad;
@@ -648,6 +695,7 @@ void IdentityPanel::renderBackground()
             gr.multiplyOpacity (sg.strandAlpha[i]);
             g.setGradientFill (gr);
             g.strokePath (sg.strands[i], PathStrokeType (jmax (0.6f, sg.strandWidth[i]), PathStrokeType::curved, PathStrokeType::rounded));
+            g.strokePath (sg.strandTails[i], PathStrokeType (jmax (0.5f, sg.strandWidth[i] * 0.75f), PathStrokeType::curved, PathStrokeType::rounded));
         }
     }
 
@@ -690,21 +738,29 @@ void IdentityPanel::paint (Graphics& g)
     if (face.isValid() || level < 0.002f)
         return;
 
-    // the face lights up with the voice: rim light, lips and sound waves leaving the mouth (no lip sync)
+    // the face lights up with the voice: rim light, a soft glow on lips and cheek, and faint sound waves (no lip sync)
     const auto& sg = singer;
     const float un = sg.unit;
-    g.setColour (pal::rose.withAlpha (0.25f * level));
-    g.strokePath (sg.frontContour, PathStrokeType ((6.0f + 10.0f * level) * un, PathStrokeType::curved, PathStrokeType::rounded));
-    g.setColour (pal::roseSoft.withAlpha (0.35f * level));
+    g.setColour (pal::rose.withAlpha (0.22f * level));
+    g.strokePath (sg.frontContour, PathStrokeType ((6.0f + 8.0f * level) * un, PathStrokeType::curved, PathStrokeType::rounded));
+    {
+        const float cr = 70.0f * un;
+        g.setGradientFill (ColourGradient (pal::roseSoft.withAlpha (0.16f * level), sg.cheek.x, sg.cheek.y, pal::roseSoft.withAlpha (0.0f), sg.cheek.x + cr, sg.cheek.y, true));
+        g.fillEllipse (Rectangle<float> (cr * 2.0f, cr * 2.0f).withCentre (sg.cheek));
+    }
+    g.setColour (pal::roseSoft.withAlpha (0.22f * level));
     g.fillPath (sg.upperLip);
     g.fillPath (sg.lowerLip);
     for (int k = 0; k < 3; ++k)
     {
-        const float rr = (28.0f + 22.0f * (float) k + 10.0f * level) * un;
+        const float rr = (26.0f + 18.0f * (float) k + 6.0f * level) * un;
         Path arc;
-        arc.addCentredArc (sg.mouthPoint.x, sg.mouthPoint.y, rr, rr, 0.0f, degreesToRadians (50.0f), degreesToRadians (130.0f), true);
-        g.setColour (pal::rose.withAlpha (jlimit (0.0f, 1.0f, level * (0.85f - 0.22f * (float) k))));
-        g.strokePath (arc, PathStrokeType (jmax (1.2f, 2.5f * un), PathStrokeType::curved, PathStrokeType::rounded));
+        arc.addCentredArc (sg.mouthPoint.x, sg.mouthPoint.y, rr, rr, 0.0f, degreesToRadians (62.0f), degreesToRadians (118.0f), true);
+        const float a = jlimit (0.0f, 1.0f, level * (0.45f - 0.12f * (float) k));
+        g.setColour (pal::rose.withAlpha (a * 0.35f));
+        g.strokePath (arc, PathStrokeType (jmax (2.0f, 4.0f * un), PathStrokeType::curved, PathStrokeType::rounded));
+        g.setColour (pal::roseSoft.withAlpha (a));
+        g.strokePath (arc, PathStrokeType (jmax (0.8f, 1.2f * un), PathStrokeType::curved, PathStrokeType::rounded));
     }
 }
 
